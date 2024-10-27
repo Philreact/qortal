@@ -1,14 +1,12 @@
 let customQDNHistoryPaths = []; // Array to track visited paths
 let currentIndex = -1; // Index to track the current position in the history
-let isManualNavigation = true; // Flag to control when to add new paths
-let lastKnownPath = ""; // Track the last known path to avoid duplicates
+let isManualNavigation = true; // Flag to control when to add new paths. set to false when navigating through a back/forward call
 
 
 function resetVariables(){
 let customQDNHistoryPaths = [];
 let currentIndex = -1;
 let isManualNavigation = true;
-let lastKnownPath = "";
 }
 
 function getNameAfterService(url) {
@@ -38,9 +36,7 @@ function parseUrl(url) {
 
         // Check if isManualNavigation query exists and is set to "false"
         const isManual = parsedUrl.searchParams.get("isManualNavigation");
-        console.log('isManuel', isManual)
         if (isManual !== null && isManual == "false") {
-        console.log('isManual going through')
             isManualNavigation = false
             // Optional: handle this condition if needed (e.g., return or adjust the response)
         }
@@ -62,6 +58,7 @@ function parseUrl(url) {
     }
 }
 
+// Tell the client to open a new tab. Done when an app is linking to another app
 function openNewTab(data){
 window.parent.postMessage({
 action: 'SET_TAB',
@@ -69,7 +66,7 @@ requestedHandler:'UI',
 payload: data
 }, '*');
 }
-
+// sends navigation information to the client in order to manage back/forward navigation
 function sendNavigationInfoToParent(isDOMContentLoaded){
 window.parent.postMessage({
 action: 'NAVIGATION_HISTORY',
@@ -83,9 +80,10 @@ isDOMContentLoaded: isDOMContentLoaded ? true : false
 
 }
 
+
 function handleQDNResourceDisplayed(pathurl, isDOMContentLoaded) {
+// make sure that an empty string the root path
 const path = pathurl || '/'
-console.log('enterpath', path)
     if (!isManualNavigation) {
     isManualNavigation = true
         // If the navigation is automatic (back/forward), do not add new entries
@@ -95,10 +93,8 @@ console.log('enterpath', path)
 
     // If it's a new path, add it to the history array and adjust the index
     if (customQDNHistoryPaths[currentIndex] !== path) {
-        console.log('enter1')
         // If we're not at the end of the array, clear forward history
         if (currentIndex < customQDNHistoryPaths.length - 1) {
-           console.log('enter2')
             customQDNHistoryPaths = customQDNHistoryPaths.slice(0, currentIndex + 1);
         }
 
@@ -109,15 +105,11 @@ console.log('enterpath', path)
 
             })
             sendNavigationInfoToParent(isDOMContentLoaded)
-//        window.history.pushState({}, '', path);
-        console.log("QDN Resource Displayed. Updated history:", customQDNHistoryPaths);
     } else {
         currentIndex = customQDNHistoryPaths.length - 1
         sendNavigationInfoToParent(isDOMContentLoaded)
     }
 
-    // Update the last known path
-    lastKnownPath = path;
 
     // Reset isManualNavigation after handling
     isManualNavigation = true;
@@ -281,8 +273,7 @@ function convertToResourceUrl(url, isLink) {
     return buildResourceUrl(c.service, c.name, c.identifier, c.path, isLink);
 }
 
-window.addEventListener("message", (event) => {
-console.log('message from ui', event)
+window.addEventListener("message", async (event) => {
     if (event == null || event.data == null || event.data.length == 0) {
         return;
     }
@@ -325,24 +316,51 @@ console.log('message from ui', event)
             if (data.identifier != null) url = url.concat("/" + data.identifier);
             return httpGetAsyncWithEvent(event, url);
 
-        case "LINK_TO_QDN_RESOURCE":
-             if (data.service == null) data.service = "WEBSITE"; // Default to WEBSITE
+       case "LINK_TO_QDN_RESOURCE":
+           if (data.service == null) data.service = "WEBSITE"; // Default to WEBSITE
 
-            const nameOfCurrentApp = getNameAfterService(window.location.href)
-            if(nameOfCurrentApp !== data.name){
-             openNewTab({
-                            name: data.name,
-                            service: data.service,
-                            identifier: data?.identifier,
-                            path: data?.path
-                        })
-            } else {
-             window.location = buildResourceUrl(data.service, data.name, data.identifier, data.path, true);
+           const nameOfCurrentApp = getNameAfterService(window.location.href);
+           // Check to see if the link is an external app. If it is, request that the client opens a new tab instead of manipulating the window's history stack.
+           if (nameOfCurrentApp !== data.name) {
+               // Attempt to open a new tab and wait for a response
+               const navigationPromise = new Promise((resolve, reject) => {
+                   function handleMessage(event) {
+                       if (event.data?.action === 'SET_TAB_SUCCESS' && event.data.payload?.name === data.name) {
+                           window.removeEventListener('message', handleMessage);
+                           resolve();
+                       }
+                   }
 
-            }
+                   window.addEventListener('message', handleMessage);
 
-//                history.pushState(null, '', newUrl); // Updates URL without reload
-            return;
+                   // Send the message to the parent window
+                   openNewTab({
+                       name: data.name,
+                       service: data.service,
+                       identifier: data.identifier,
+                       path: data.path
+                   });
+
+                   // Set a timeout to reject the promise if no response is received within 200ms
+                   setTimeout(() => {
+                       window.removeEventListener('message', handleMessage);
+                       reject(new Error("No response within 200ms"));
+                   }, 200);
+               });
+
+               // Handle the promise, and if it times out, fall back to the else block
+               navigationPromise
+                   .then(() => {
+                       console.log('Tab opened successfully');
+                   })
+                   .catch(() => {
+                       console.warn('No response, proceeding with window.location');
+                       window.location = buildResourceUrl(data.service, data.name, data.identifier, data.path, true);
+                   });
+           } else {
+               window.location = buildResourceUrl(data.service, data.name, data.identifier, data.path, true);
+           }
+           return;
 
         case "LIST_QDN_RESOURCES":
             url = "/arbitrary/resources?";
@@ -491,48 +509,16 @@ console.log('message from ui', event)
             if (data.inverse != null) url = url.concat("&inverse=" + data.inverse);
             return httpGetAsyncWithEvent(event, url);
 
-        case "NAVIGATE_BACK":
-           if (currentIndex > 0) {
-                   currentIndex -= 1;
-                   const previousPath = customQDNHistoryPaths[currentIndex];
-                    console.log('previousPath', previousPath)
-                   // Use replaceState to avoid full reload
-//                   window.history.replaceState({}, '', previousPath);
-                                      window.postMessage({ action: 'NAVIGATE_TO_PATH', path: previousPath }, '*');
 
-                   lastKnownPath = previousPath;
-               }
-
-            return;
          case "PERFORMING_NON_MANUAL":
                     isManualNavigation = false
                     return;
-        case "NAVIGATE_FORWARD":
-            window.history.forward();
-            return;
-
-        case "GET_HISTORY_LENGTH":
-            const actualHistoryLength = window.history.length;
-            console.log('tabId', data.tabId, event)
-            const response = {
-                action: 'HISTORY_LENGTH',
-                historyLength: customQDNHistoryPaths.length,
-                currentIndex: currentIndex,
-                hasBack: currentIndex > 0,
-                hasForward: currentIndex < customQDNHistoryPaths.length - 1,
-                tabId: data.tabId,
-                requestedHandler: 'UI'
-            };
-
-            // Pass the response to `handleResponse`
-            handleResponse(event, response);
-            return;
 
         default:
             // Pass to parent (UI), in case they can fulfil this request
-
             event.data.requestedHandler = "UI";
             parent.postMessage(event.data, '*', [event.ports[0]]);
+
 
             return;
     }
@@ -711,7 +697,7 @@ resetVariables()
         identifier: _qdnIdentifier,
         path: _qdnPath
     });
-    console.log('DOMContentLoaded', event, window?.location?.href)
+    // send to the client the first path when the app loads.
     const firstPath = parseUrl(window?.location?.href || "")
     handleQDNResourceDisplayed(firstPath, true);
   // Increment counter when page fully loads
@@ -721,12 +707,10 @@ resetVariables()
  * Handle app navigation
  */
 navigation.addEventListener('navigate', (event) => {
-console.log('navigation event', event)
     const url = new URL(event.destination.url);
 
     let fullpath = url.pathname + url.hash;
     const processedPath = (fullpath.startsWith(_qdnBase)) ? fullpath.slice(_qdnBase.length) : fullpath;
-    console.log('processedPath', processedPath)
     qortalRequest({
         action: "QDN_RESOURCE_DISPLAYED",
         service: _qdnService,
@@ -735,32 +719,9 @@ console.log('navigation event', event)
         path: processedPath
     });
 
+   // Put a timeout so that the DOMContentLoaded listener's logic executes before the navigate listener
    setTimeout(()=> {
     handleQDNResourceDisplayed(processedPath);
    }, 100)
 });
 
-//window.addEventListener("popstate", (event) => {
-//console.log('enterpop')
-//    const currentPath = window.location.pathname + window.location.hash;
-//        const processedPath = (currentPath.startsWith(_qdnBase)) ? currentPath.slice(_qdnBase.length) : currentPath;
-//        console.log('processedPath', processedPath)
-//    // Indicate that this is not a manual navigation
-//    isManualNavigation = false;
-//
-//    // Determine if the navigation is backward or forward
-//    if (currentIndex > 0 && customQDNHistoryPaths[currentIndex - 1] === processedPath) {
-//        // Backward navigation detected
-//        currentIndex = Math.max(0, currentIndex - 1);
-//        console.log("Detected backward navigation. Current index:", currentIndex);
-//    } else if (currentIndex < customQDNHistoryPaths.length - 1 && customQDNHistoryPaths[currentIndex + 1] === processedPath) {
-//        // Forward navigation detected
-//        currentIndex = Math.min(customQDNHistoryPaths.length - 1, currentIndex + 1);
-//        console.log("Detected forward navigation. Current index:", currentIndex);
-//    }
-//
-//    // Update the last known path based on the current index
-//    lastKnownPath = customQDNHistoryPaths[currentIndex] || currentPath;
-//    sendNavigationInfoToParent()
-//    console.log("Custom history paths:", customQDNHistoryPaths);
-//});
