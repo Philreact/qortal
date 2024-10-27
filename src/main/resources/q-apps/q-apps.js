@@ -1,3 +1,128 @@
+let customQDNHistoryPaths = []; // Array to track visited paths
+let currentIndex = -1; // Index to track the current position in the history
+let isManualNavigation = true; // Flag to control when to add new paths
+let lastKnownPath = ""; // Track the last known path to avoid duplicates
+
+
+function resetVariables(){
+let customQDNHistoryPaths = [];
+let currentIndex = -1;
+let isManualNavigation = true;
+let lastKnownPath = "";
+}
+
+function getNameAfterService(url) {
+    try {
+        const parsedUrl = new URL(url);
+        const pathParts = parsedUrl.pathname.split('/');
+
+        // Find the index of "WEBSITE" or "APP" and get the next part
+        const serviceIndex = pathParts.findIndex(part => part === 'WEBSITE' || part === 'APP');
+
+        if (serviceIndex !== -1 && pathParts[serviceIndex + 1]) {
+            return pathParts[serviceIndex + 1];
+        } else {
+            return null; // Return null if "WEBSITE" or "APP" is not found or has no following part
+        }
+    } catch (error) {
+        console.error("Invalid URL provided:", error);
+        return null;
+    }
+}
+
+
+
+function parseUrl(url) {
+    try {
+        const parsedUrl = new URL(url);
+
+        // Check if isManualNavigation query exists and is set to "false"
+        const isManual = parsedUrl.searchParams.get("isManualNavigation");
+        console.log('isManuel', isManual)
+        if (isManual !== null && isManual == "false") {
+        console.log('isManual going through')
+            isManualNavigation = false
+            // Optional: handle this condition if needed (e.g., return or adjust the response)
+        }
+
+        // Remove theme, identifier, and time queries if they exist
+        parsedUrl.searchParams.delete("theme");
+        parsedUrl.searchParams.delete("identifier");
+        parsedUrl.searchParams.delete("time");
+        parsedUrl.searchParams.delete("isManualNavigation");
+
+        // Extract the pathname and remove the prefix if it matches "render/APP" or "render/WEBSITE"
+        const path = parsedUrl.pathname.replace(/^\/render\/(APP|WEBSITE)\/[^/]+/, "");
+
+        // Combine the path with remaining query params (if any)
+        return path + parsedUrl.search;
+    } catch (error) {
+        console.error("Invalid URL provided:", error);
+        return null;
+    }
+}
+
+function openNewTab(data){
+window.parent.postMessage({
+action: 'SET_TAB',
+requestedHandler:'UI',
+payload: data
+}, '*');
+}
+
+function sendNavigationInfoToParent(isDOMContentLoaded){
+window.parent.postMessage({
+action: 'NAVIGATION_HISTORY',
+requestedHandler:'UI',
+payload: {
+customQDNHistoryPaths,
+currentIndex,
+isDOMContentLoaded: isDOMContentLoaded ? true : false
+}
+}, '*');
+
+}
+
+function handleQDNResourceDisplayed(pathurl, isDOMContentLoaded) {
+const path = pathurl || '/'
+console.log('enterpath', path)
+    if (!isManualNavigation) {
+    isManualNavigation = true
+        // If the navigation is automatic (back/forward), do not add new entries
+        return;
+    }
+
+
+    // If it's a new path, add it to the history array and adjust the index
+    if (customQDNHistoryPaths[currentIndex] !== path) {
+        console.log('enter1')
+        // If we're not at the end of the array, clear forward history
+        if (currentIndex < customQDNHistoryPaths.length - 1) {
+           console.log('enter2')
+            customQDNHistoryPaths = customQDNHistoryPaths.slice(0, currentIndex + 1);
+        }
+
+        // Add the new path and move the index to the new position
+        customQDNHistoryPaths.push(path);
+        currentIndex = customQDNHistoryPaths.length - 1;
+            sendNavigationInfoToParent({
+
+            })
+            sendNavigationInfoToParent(isDOMContentLoaded)
+//        window.history.pushState({}, '', path);
+        console.log("QDN Resource Displayed. Updated history:", customQDNHistoryPaths);
+    } else {
+        currentIndex = customQDNHistoryPaths.length - 1
+        sendNavigationInfoToParent(isDOMContentLoaded)
+    }
+
+    // Update the last known path
+    lastKnownPath = path;
+
+    // Reset isManualNavigation after handling
+    isManualNavigation = true;
+}
+
 function httpGet(url) {
     var request = new XMLHttpRequest();
     request.open("GET", url, false);
@@ -157,6 +282,7 @@ function convertToResourceUrl(url, isLink) {
 }
 
 window.addEventListener("message", (event) => {
+console.log('message from ui', event)
     if (event == null || event.data == null || event.data.length == 0) {
         return;
     }
@@ -200,8 +326,22 @@ window.addEventListener("message", (event) => {
             return httpGetAsyncWithEvent(event, url);
 
         case "LINK_TO_QDN_RESOURCE":
-            if (data.service == null) data.service = "WEBSITE"; // Default to WEBSITE
-            window.location = buildResourceUrl(data.service, data.name, data.identifier, data.path, true);
+             if (data.service == null) data.service = "WEBSITE"; // Default to WEBSITE
+
+            const nameOfCurrentApp = getNameAfterService(window.location.href)
+            if(nameOfCurrentApp !== data.name){
+             openNewTab({
+                            name: data.name,
+                            service: data.service,
+                            identifier: data?.identifier,
+                            path: data?.path
+                        })
+            } else {
+             window.location = buildResourceUrl(data.service, data.name, data.identifier, data.path, true);
+
+            }
+
+//                history.pushState(null, '', newUrl); // Updates URL without reload
             return;
 
         case "LIST_QDN_RESOURCES":
@@ -351,10 +491,49 @@ window.addEventListener("message", (event) => {
             if (data.inverse != null) url = url.concat("&inverse=" + data.inverse);
             return httpGetAsyncWithEvent(event, url);
 
+        case "NAVIGATE_BACK":
+           if (currentIndex > 0) {
+                   currentIndex -= 1;
+                   const previousPath = customQDNHistoryPaths[currentIndex];
+                    console.log('previousPath', previousPath)
+                   // Use replaceState to avoid full reload
+//                   window.history.replaceState({}, '', previousPath);
+                                      window.postMessage({ action: 'NAVIGATE_TO_PATH', path: previousPath }, '*');
+
+                   lastKnownPath = previousPath;
+               }
+
+            return;
+         case "PERFORMING_NON_MANUAL":
+                    isManualNavigation = false
+                    return;
+        case "NAVIGATE_FORWARD":
+            window.history.forward();
+            return;
+
+        case "GET_HISTORY_LENGTH":
+            const actualHistoryLength = window.history.length;
+            console.log('tabId', data.tabId, event)
+            const response = {
+                action: 'HISTORY_LENGTH',
+                historyLength: customQDNHistoryPaths.length,
+                currentIndex: currentIndex,
+                hasBack: currentIndex > 0,
+                hasForward: currentIndex < customQDNHistoryPaths.length - 1,
+                tabId: data.tabId,
+                requestedHandler: 'UI'
+            };
+
+            // Pass the response to `handleResponse`
+            handleResponse(event, response);
+            return;
+
         default:
             // Pass to parent (UI), in case they can fulfil this request
+
             event.data.requestedHandler = "UI";
             parent.postMessage(event.data, '*', [event.ports[0]]);
+
             return;
     }
 
@@ -523,7 +702,8 @@ const qortalRequestWithTimeout = (request, timeout) =>
 /**
  * Send current page details to UI
  */
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', (event) => {
+resetVariables()
     qortalRequest({
         action: "QDN_RESOURCE_DISPLAYED",
         service: _qdnService,
@@ -531,19 +711,56 @@ document.addEventListener('DOMContentLoaded', () => {
         identifier: _qdnIdentifier,
         path: _qdnPath
     });
+    console.log('DOMContentLoaded', event, window?.location?.href)
+    const firstPath = parseUrl(window?.location?.href || "")
+    handleQDNResourceDisplayed(firstPath, true);
+  // Increment counter when page fully loads
 });
 
 /**
  * Handle app navigation
  */
 navigation.addEventListener('navigate', (event) => {
+console.log('navigation event', event)
     const url = new URL(event.destination.url);
+
     let fullpath = url.pathname + url.hash;
+    const processedPath = (fullpath.startsWith(_qdnBase)) ? fullpath.slice(_qdnBase.length) : fullpath;
+    console.log('processedPath', processedPath)
     qortalRequest({
         action: "QDN_RESOURCE_DISPLAYED",
         service: _qdnService,
         name: _qdnName,
         identifier: _qdnIdentifier,
-        path: (fullpath.startsWith(_qdnBase)) ? fullpath.slice(_qdnBase.length) : fullpath
+        path: processedPath
     });
+
+   setTimeout(()=> {
+    handleQDNResourceDisplayed(processedPath);
+   }, 100)
 });
+
+//window.addEventListener("popstate", (event) => {
+//console.log('enterpop')
+//    const currentPath = window.location.pathname + window.location.hash;
+//        const processedPath = (currentPath.startsWith(_qdnBase)) ? currentPath.slice(_qdnBase.length) : currentPath;
+//        console.log('processedPath', processedPath)
+//    // Indicate that this is not a manual navigation
+//    isManualNavigation = false;
+//
+//    // Determine if the navigation is backward or forward
+//    if (currentIndex > 0 && customQDNHistoryPaths[currentIndex - 1] === processedPath) {
+//        // Backward navigation detected
+//        currentIndex = Math.max(0, currentIndex - 1);
+//        console.log("Detected backward navigation. Current index:", currentIndex);
+//    } else if (currentIndex < customQDNHistoryPaths.length - 1 && customQDNHistoryPaths[currentIndex + 1] === processedPath) {
+//        // Forward navigation detected
+//        currentIndex = Math.min(customQDNHistoryPaths.length - 1, currentIndex + 1);
+//        console.log("Detected forward navigation. Current index:", currentIndex);
+//    }
+//
+//    // Update the last known path based on the current index
+//    lastKnownPath = customQDNHistoryPaths[currentIndex] || currentPath;
+//    sendNavigationInfoToParent()
+//    console.log("Custom history paths:", customQDNHistoryPaths);
+//});
