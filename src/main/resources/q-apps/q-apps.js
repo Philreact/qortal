@@ -36,17 +36,18 @@ function parseUrl(url) {
 
         // Check if isManualNavigation query exists and is set to "false"
         const isManual = parsedUrl.searchParams.get("isManualNavigation");
+
         if (isManual !== null && isManual == "false") {
             isManualNavigation = false
             // Optional: handle this condition if needed (e.g., return or adjust the response)
         }
+
 
         // Remove theme, identifier, and time queries if they exist
         parsedUrl.searchParams.delete("theme");
         parsedUrl.searchParams.delete("identifier");
         parsedUrl.searchParams.delete("time");
         parsedUrl.searchParams.delete("isManualNavigation");
-
         // Extract the pathname and remove the prefix if it matches "render/APP" or "render/WEBSITE"
         const path = parsedUrl.pathname.replace(/^\/render\/(APP|WEBSITE)\/[^/]+/, "");
 
@@ -93,17 +94,14 @@ const path = pathurl || '/'
 
     // If it's a new path, add it to the history array and adjust the index
     if (customQDNHistoryPaths[currentIndex] !== path) {
-        // If we're not at the end of the array, clear forward history
-        if (currentIndex < customQDNHistoryPaths.length - 1) {
-            customQDNHistoryPaths = customQDNHistoryPaths.slice(0, currentIndex + 1);
-        }
+
+           customQDNHistoryPaths = customQDNHistoryPaths.slice(0, currentIndex + 1);
+
+
 
         // Add the new path and move the index to the new position
         customQDNHistoryPaths.push(path);
         currentIndex = customQDNHistoryPaths.length - 1;
-            sendNavigationInfoToParent({
-
-            })
             sendNavigationInfoToParent(isDOMContentLoaded)
     } else {
         currentIndex = customQDNHistoryPaths.length - 1
@@ -512,6 +510,7 @@ window.addEventListener("message", async (event) => {
 
          case "PERFORMING_NON_MANUAL":
                     isManualNavigation = false
+                    currentIndex = data.currentIndex
                     return;
 
         default:
