@@ -112,7 +112,7 @@ window.addEventListener("message", async (event) => {
         case "ADD_LIST_ITEMS":
         case "DELETE_LIST_ITEM":
             const isExtInstalledRes = await isExtensionInstalledFunc()
-            if(isExtInstalledRes?.version) break;
+            if(isExtInstalledRes?.version) return;
             const errorString = "Interactive features were requested, but these are not yet supported when viewing via a gateway. To use interactive features, please access using the Qortal UI desktop app. More info at: https://qortal.org";
             response = "{\"error\": \"" + errorString + "\"}"
 
