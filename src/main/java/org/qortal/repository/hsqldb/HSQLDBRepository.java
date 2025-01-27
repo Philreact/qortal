@@ -58,6 +58,7 @@ public class HSQLDBRepository implements Repository {
 	private final NetworkRepository networkRepository = new HSQLDBNetworkRepository(this);
 	private final TransactionRepository transactionRepository = new HSQLDBTransactionRepository(this);
 	private final VotingRepository votingRepository = new HSQLDBVotingRepository(this);
+	private final PurchaseRepository purchaseRepository = new HSQLDBPurchaseRepository(this);
 
 	// Constructors
 
@@ -131,7 +132,10 @@ public class HSQLDBRepository implements Repository {
 	public CrossChainRepository getCrossChainRepository() {
 		return this.crossChainRepository;
 	}
-
+	@Override
+	public PurchaseRepository getPurchaseRepository() {
+		return this.purchaseRepository;
+	}
 	@Override
 	public GroupRepository getGroupRepository() {
 		return this.groupRepository;

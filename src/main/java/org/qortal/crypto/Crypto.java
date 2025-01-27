@@ -1,20 +1,39 @@
 package org.qortal.crypto;
 
 import com.google.common.primitives.Bytes;
+
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
 import org.bouncycastle.math.ec.rfc8032.Ed25519;
 import org.qortal.account.Account;
 import org.qortal.utils.Base58;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
 import java.util.Arrays;
+import java.security.Security;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+
+import org.libsodium.jni.Sodium;
+import org.libsodium.jni.SodiumConstants;
+import org.libsodium.jni.NaCl;
+import org.libsodium.jni.crypto.Random;
 
 public abstract class Crypto {
 
@@ -24,6 +43,13 @@ public abstract class Crypto {
 	public static final byte ADDRESS_VERSION = 58; // Q
 	public static final byte AT_ADDRESS_VERSION = 23; // A
 	public static final byte NODE_ADDRESS_VERSION = 53; // N
+	private static final int GCM_NONCE_LENGTH = 12; // 12 bytes is standard for AES-GCM
+    private static final int GCM_TAG_LENGTH = 16;   // 16 bytes = 128 bits
+
+	static {
+        // Register the Bouncy Castle provider, if not already
+        Security.addProvider(new BouncyCastleProvider());
+    }
 
 	/**
 	 * Returns 32-byte SHA-256 digest of message passed in input.
@@ -292,4 +318,31 @@ public abstract class Crypto {
 
 		return sharedSecret;
 	}
+
+	public static byte[] encryptAESGCM(byte[] key, byte[] nonce, byte[] message) {
+        // Validate key length (e.g., 16, 24, or 32 bytes for AES)
+        if (!(key.length == 16 || key.length == 24 || key.length == 32)) {
+            throw new IllegalArgumentException("Invalid key length (must be 16, 24, or 32 bytes)");
+        }
+
+        // Validate nonce length (12 bytes is standard for GCM)
+        if (nonce.length != GCM_NONCE_LENGTH) {
+            throw new IllegalArgumentException("Invalid nonce length (must be 12 bytes for AES-GCM)");
+        }
+
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding", "BC");
+            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
+
+            // GCMParameterSpec tag length is in bits
+            GCMParameterSpec gcmSpec = new GCMParameterSpec(GCM_TAG_LENGTH * 8, nonce);
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec, gcmSpec);
+
+            // Perform encryption
+            return cipher.doFinal(message);
+        } catch (InvalidAlgorithmParameterException | InvalidKeyException | NoSuchAlgorithmException | NoSuchProviderException | BadPaddingException | IllegalBlockSizeException | NoSuchPaddingException e) {
+            throw new IllegalStateException("Encryption failed", e);
+        }
+    }
+	
 }

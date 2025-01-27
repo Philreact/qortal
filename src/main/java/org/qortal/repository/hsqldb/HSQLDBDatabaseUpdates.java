@@ -1,17 +1,17 @@
 package org.qortal.repository.hsqldb;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.qortal.controller.Controller;
-import org.qortal.controller.tradebot.BitcoinACCTv1TradeBot;
-import org.qortal.gui.SplashFrame;
-
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.stream.Collectors;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.qortal.controller.Controller;
+import org.qortal.controller.tradebot.BitcoinACCTv1TradeBot;
+import org.qortal.gui.SplashFrame;
 
 public class HSQLDBDatabaseUpdates {
 
@@ -82,7 +82,7 @@ public class HSQLDBDatabaseUpdates {
 		int databaseVersion = fetchDatabaseVersion(connection);
 
 		try (Statement stmt = connection.createStatement()) {
-
+			LOGGER.info("update" + databaseVersion);
 			/*
 			 * Try not to add too many constraints as much of these checks will be performed during transaction validation. Also some constraints might be too
 			 * harsh on competing unconfirmed transactions.
@@ -1052,7 +1052,31 @@ public class HSQLDBDatabaseUpdates {
 					// Update blocks minted penalty
 					stmt.execute("UPDATE Accounts SET blocks_minted_penalty = -5000000 WHERE blocks_minted_penalty < 0");
 					break;
-
+				case 50:
+					// Create PurchaseBotStates table
+					stmt.execute(
+						"CREATE TABLE PurchaseBotStates ("
+						+ "private_key QortalKeySeed NOT NULL, "                // Bot's private key
+						+ "public_key QortalPublicKey NOT NULL, "              // Derived public key
+						+ "product_id VARCHAR(64) NOT NULL, "                 // Unique product identifier
+						+ "seller_address QortalAddress NOT NULL, "           // Seller's address
+						+ "price QortalAmount NOT NULL, "                     // Product price
+						+ "product_key TEXT NOT NULL, "                       // Product key to deliver
+						+ "state VARCHAR(32) NOT NULL, "                      // Current state of the purchase
+						+ "state_value INT NOT NULL, "                        // Numeric representation of the state
+						+ "last_payment_block_height INT, "					  // Block height of the incoming payment
+						+ "PRIMARY KEY (private_key, product_id)"             // Unique composite key
+						+ ")"
+					);
+				
+					// Create indexes to optimize queries
+					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseProductIndex ON PurchaseBotStates (product_id)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseSellerIndex ON PurchaseBotStates (seller_address)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStateIndex ON PurchaseBotStates (state)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStateValueIndex ON PurchaseBotStates (state_value)");
+				
+					break;
+				
 				default:
 					// nothing to do
 					return false;

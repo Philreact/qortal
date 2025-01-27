@@ -18,6 +18,7 @@ import org.qortal.controller.hsqldb.HSQLDBDataCacheManager;
 import org.qortal.controller.repository.NamesDatabaseIntegrityCheck;
 import org.qortal.controller.repository.PruneManager;
 import org.qortal.controller.tradebot.TradeBot;
+import org.qortal.controller.purchasebot.PurchaseBot;
 import org.qortal.data.account.AccountBalanceData;
 import org.qortal.data.account.AccountData;
 import org.qortal.data.block.BlockData;
@@ -530,6 +531,9 @@ public class Controller extends Thread {
 
 		LOGGER.info("Starting trade-bot");
 		TradeBot.getInstance();
+
+		LOGGER.info("Starting purchase-bot");
+		PurchaseBot.getInstance();
 
 		// Arbitrary data controllers
 		LOGGER.info("Starting arbitrary-transaction controllers");
