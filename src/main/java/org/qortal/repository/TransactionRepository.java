@@ -12,6 +12,8 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 
+import org.qortal.transaction.PaymentTransaction;
+
 public interface TransactionRepository {
 
 	// Fetching transactions / transaction height
@@ -351,4 +353,15 @@ public interface TransactionRepository {
 
 	public void delete(TransactionData transactionData) throws DataException;
 
+	 /**
+     * Returns list of PaymentTransaction instances matching recipient, amount, and block height.
+     *
+     * @param recipient the recipient address to filter by
+     * @param amount the amount to filter by
+     * @param blockHeight the block height to filter by
+     * @param limit the maximum number of results to return
+     * @return list of PaymentTransaction instances, or empty if none
+     * @throws DataException if an error occurs during the query
+     */
+    List<PaymentTransaction> findPaymentTransactions(String recipient, long amount, int blockHeight, int limit) throws DataException;
 }

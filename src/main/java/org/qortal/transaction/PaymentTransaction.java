@@ -1,5 +1,8 @@
 package org.qortal.transaction;
 
+import java.util.Collections;
+import java.util.List;
+
 import org.qortal.account.Account;
 import org.qortal.asset.Asset;
 import org.qortal.data.PaymentData;
@@ -8,9 +11,6 @@ import org.qortal.data.transaction.TransactionData;
 import org.qortal.payment.Payment;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
-
-import java.util.Collections;
-import java.util.List;
 
 public class PaymentTransaction extends Transaction {
 
@@ -91,5 +91,7 @@ public class PaymentTransaction extends Transaction {
 		new Payment(this.repository).orphanReferencesAndFees(this.paymentTransactionData.getSenderPublicKey(), getPaymentData(), this.paymentTransactionData.getFee(),
 				this.paymentTransactionData.getSignature(), this.paymentTransactionData.getReference(), false);
 	}
-
+	public PaymentTransactionData getPaymentTransactionData() {
+		return this.paymentTransactionData;
+	}
 }

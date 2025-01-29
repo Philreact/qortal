@@ -1,7 +1,7 @@
 package org.qortal.controller.purchasebot;
 
-import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -14,7 +14,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bitcoinj.core.ECKey;
 import org.qortal.account.PrivateKeyAccount;
-import org.qortal.api.resource.TransactionsResource;
 import org.qortal.controller.Controller;
 import org.qortal.controller.Synchronizer;
 import org.qortal.crypto.Crypto;
@@ -31,8 +30,8 @@ import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.transaction.ChatTransaction;
+import org.qortal.transaction.PaymentTransaction;
 import org.qortal.transaction.Transaction;
-import org.qortal.transaction.Transaction.TransactionType;
 import org.qortal.transaction.Transaction.ValidationResult;
 import org.qortal.transform.TransformationException;
 import org.qortal.transform.transaction.ChatTransactionTransformer;
@@ -62,6 +61,8 @@ public class PurchaseBot implements Listener {
         }
         return instance;
     }
+
+ 
 
     @Override
     public void listen(Event event) {
@@ -130,21 +131,23 @@ public class PurchaseBot implements Listener {
         // Fetch payment transactions addressed to the seller
         // List<TransactionData> paymentTransactions = repository.getTransactionRepository()
         //         .getTransactionsByRecipient(sellerAddress);
-        List<byte[]> signatures = repository.getTransactionRepository().getSignaturesMatchingCriteria(null, null, null,
-                Collections.singletonList(TransactionType.PAYMENT), null, null, sellerAddress, TransactionsResource.ConfirmationStatus.CONFIRMED, 1, 0, true);
+        // List<byte[]> signatures = repository.getTransactionRepository().getSignaturesMatchingCriteria(null, null, null,
+        //         Collections.singletonList(TransactionType.PAYMENT), null, null, sellerAddress, TransactionsResource.ConfirmationStatus.CONFIRMED, 1, 0, true);
+        
+                List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(sellerAddress, price * 100000000,  2000000, 1);
 
-        // // Expand signatures to transactions
-        List<TransactionData> paymentTransactions = new ArrayList<>(signatures.size());
-        for (byte[] signature : signatures) {
-            paymentTransactions.add(repository.getTransactionRepository().fromSignature(signature));
-        }
+        // // // Expand signatures to transactions
+        // List<TransactionData> paymentTransactions = new ArrayList<>(signatures.size());
+        // for (byte[] signature : signatures) {
+        //     paymentTransactions.add(repository.getTransactionRepository().fromSignature(signature));
+        // }
 
-        for (TransactionData paymentTransaction : paymentTransactions) {
+        for (PaymentTransaction paymentTransaction : paymentTransactions) {
 
-            String txSignature = Base58.encode(paymentTransaction.getSignature());
+            String txSignature = Base58.encode(paymentTransaction.getPaymentTransactionData().getSignature());
 
             LOGGER.info("PaymentTransaction: signature={}",
-                    Base58.encode(paymentTransaction.getSignature()));
+                    Base58.encode(paymentTransaction.getPaymentTransactionData().getSignature()));
 
             // Check if this transaction has already been delivered
             synchronized (deliveredTransactionSignatures) {
@@ -153,6 +156,11 @@ public class PurchaseBot implements Listener {
                     continue;
                 }
                 byte[] reference = new byte[64];
+                new Random().nextBytes(reference);
+
+              
+                // System.out.println("reference: " + Base58.encode(reference));
+                System.out.println("reference (Base64): " + Base64.getEncoder().encodeToString(reference));
 
                 // Mock values for the required fields
                 byte[] senderPublicKey = purchaseBotData.getPublicKey(); // Replace with actual public key
@@ -165,8 +173,12 @@ public class PurchaseBot implements Listener {
                 // 1) Compute shared secret
                 byte[] sharedSecret = Crypto.getSharedSecret(purchaseBotData.getPrivateKey(), publicKey);
 
+                System.out.println("secretHash1: " + Base64.getEncoder().encodeToString(sharedSecret));
+
                 // 2) Hash the shared secret -> 32-byte AES-256 key
                 byte[] chatEncryptionSeed = Crypto.digest(sharedSecret);
+
+                System.out.println("secretHash2: " + Base64.getEncoder().encodeToString(chatEncryptionSeed));
 
                 // 3) Extract a 12-byte nonce for AES-GCM
                 byte[] nonce2 = Arrays.copyOfRange(reference, 0, 12);
@@ -180,7 +192,7 @@ public class PurchaseBot implements Listener {
 
                 // BaseTransactionData (mock or real values)
                 long timestamp = System.currentTimeMillis(); // Replace with actual timestamp
-                new Random().nextBytes(reference);
+
                 long fee = 1000L; // Transaction fee
          
 
@@ -204,6 +216,8 @@ public class PurchaseBot implements Listener {
                         isText,
                         isEncrypted
                 );
+
+                System.out.println("reference2: " + Base64.getEncoder().encodeToString(chatTransactionData.getReference()));
 
 // Convert to bytes
 try {
@@ -371,4 +385,7 @@ try {
     public static byte[] deriveTradeNativePublicKey(byte[] privateKey) {
         return Crypto.toPublicKey(privateKey);
     }
+
+  
+    
 }

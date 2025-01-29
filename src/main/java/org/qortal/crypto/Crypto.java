@@ -30,10 +30,6 @@ import javax.crypto.BadPaddingException;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 
-import org.libsodium.jni.Sodium;
-import org.libsodium.jni.SodiumConstants;
-import org.libsodium.jni.NaCl;
-import org.libsodium.jni.crypto.Random;
 
 public abstract class Crypto {
 
