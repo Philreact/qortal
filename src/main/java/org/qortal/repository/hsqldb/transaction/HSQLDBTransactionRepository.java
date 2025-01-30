@@ -1647,9 +1647,10 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 					 "FROM (SELECT * FROM Transactions WHERE block_height > ? AND block_height <= ? AND type = 2) T " +  
 					 "JOIN PaymentTransactions P ON T.signature = P.signature " +
 					 "AND P.recipient = ? " +
-					 "ORDER BY T.created_when ASC";
+					 "AND P.amount = ? " +
+					 "ORDER BY T.block_height ASC";
 	
-		Object[] bindParams = { blockHeight, blockHeightEnd, recipient };
+		Object[] bindParams = { blockHeight, blockHeightEnd, recipient, amount };
 	
 		System.out.println("Executing SQL Query with Params: " + Arrays.toString(bindParams));
 	

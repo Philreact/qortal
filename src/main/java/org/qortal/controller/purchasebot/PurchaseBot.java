@@ -130,7 +130,7 @@ public class PurchaseBot implements Listener {
         AccountData accountData = repository.getAccountRepository().getAccount("QP9Jj4S3jpCgvPnaABMx8VWzND3qpji6rP");
         byte[] publicKey = accountData.getPublicKey();
 
-        LOGGER.info("publicKey={}", Base58.encode(publicKey));
+        LOGGER.info("publicKey={}", price);
 
       
         // Fetch payment transactions addressed to the seller
@@ -145,7 +145,7 @@ public class PurchaseBot implements Listener {
                 }
                 System.out.println("Saved blockheight: " + lastSaveBlockHeight);
                 System.out.println("latest blockheight: " + latestBlockHeight);
-                List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(sellerAddress, price * 100000000,  lastSaveBlockHeight, latestBlockHeight);
+                List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(sellerAddress, price,  lastSaveBlockHeight, latestBlockHeight);
 
               
 
@@ -179,9 +179,9 @@ public class PurchaseBot implements Listener {
                 byte[] senderPublicKey = purchaseBotData.getPublicKey(); // Replace with actual public key
                 String sender = address; // Replace with actual sender address
                 int nonce = 0; // Replace with actual nonce
-                String recipient = "QP9Jj4S3jpCgvPnaABMx8VWzND3qpji6rP"; // Replace with actual recipient address
+                String recipient = paymentTransaction.getSender().getAddress(); // Replace with actual recipient address
                 byte[] chatReference = null; // Optional, replace if needed
-                byte[] data = "Hello, Qortal!".getBytes(); // Your message data
+                byte[] data = purchaseBotData.getProductKey().getBytes(); // Your message data
 
                 // 1) Compute shared secret
                 byte[] sharedSecret = Crypto.getSharedSecret(purchaseBotData.getPrivateKey(), publicKey);
