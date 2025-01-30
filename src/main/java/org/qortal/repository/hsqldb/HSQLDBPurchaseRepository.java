@@ -128,6 +128,47 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     }
 
     @Override
+    public void updateSavedBlockHeight(String productId, int blockHeight) throws DataException {
+        String sql = "UPDATE PurchaseBotStates SET last_payment_block_height = ? WHERE product_id = ?";
+        Object[] bindParams = { blockHeight, productId };
+    
+        try {
+            System.out.println("update height: " + blockHeight );
+            System.out.println("productId: " + productId );
+            this.repository.executeCheckedUpdate(sql, blockHeight, productId);
+            this.repository.saveChanges();
+        } catch (SQLException ex) {
+            throw new DataException("Failed to update saved block height", ex);
+        }
+    }
+
+    
+    @Override
+    public int getSavedBlockHeight(String productId) throws DataException {
+        String sql = "SELECT last_payment_block_height FROM PurchaseBotStates WHERE product_id = ?";
+    
+        try (ResultSet resultSet = this.repository.checkedExecute(sql, productId)) {
+            System.out.println("Executing SQL Query: " + sql);
+            System.out.println("Product ID: " + productId);
+    
+            if (resultSet == null) {
+                System.out.println("ResultSet is NULL!");
+                return 0;
+            }
+    
+          
+                int blockHeight = resultSet.getInt("last_payment_block_height");
+                System.out.println("Retrieved Block Height: " + blockHeight);
+                return blockHeight;
+           
+        } catch (SQLException e) {
+            return 0;
+        }
+    
+       
+    }
+    
+    @Override
     public int delete(String productId) throws DataException {
         try {
             return this.repository.delete("PurchaseBotStates", "product_id = ?", productId);

@@ -50,4 +50,8 @@ public interface PurchaseRepository {
      * @throws DataException if a data access error occurs.
      */
     int delete(String purchaseId) throws DataException;
+
+    void updateSavedBlockHeight(String productId, int blockHeight) throws DataException;
+
+    int getSavedBlockHeight(String productId) throws DataException;
 }

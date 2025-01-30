@@ -1640,60 +1640,53 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 	}
 
 	@Override
-	public List<PaymentTransaction> findPaymentTransactions(String recipient, long amount, int blockHeight, int limit) throws DataException {
-		if (limit <= 0) {
-			throw new IllegalArgumentException("Limit must be greater than 0");
-		}
-	
+	public List<PaymentTransaction> findPaymentTransactions(String recipient, long amount, int blockHeight, int blockHeightEnd) throws DataException {
 		String sql = "SELECT T.type, T.reference, T.creator, T.created_when, T.fee, " +
-		"T.tx_group_id, T.block_height, T.approval_status, T.approval_height, " +
-		"T.signature, P.recipient, P.amount " +
-		"FROM (SELECT * FROM Transactions WHERE block_height >= ? AND type = 2) T " +  
-		"JOIN PaymentTransactions P ON T.signature = P.signature " +
-		"AND P.recipient = ? " +
-		"ORDER BY T.created_when ASC ";
-
-
-			 
-// Bind parameters: blockHeight, recipient, amount, limit
-Object[] bindParams = { blockHeight, recipient };
-
-		System.out.println("Executing SQL Query with Params:");
-
-
+					 "T.tx_group_id, T.block_height, T.approval_status, T.approval_height, " +
+					 "T.signature, P.recipient, P.amount " +
+					 "FROM (SELECT * FROM Transactions WHERE block_height > ? AND block_height <= ? AND type = 2) T " +  
+					 "JOIN PaymentTransactions P ON T.signature = P.signature " +
+					 "AND P.recipient = ? " +
+					 "ORDER BY T.created_when ASC";
+	
+		Object[] bindParams = { blockHeight, blockHeightEnd, recipient };
+	
+		System.out.println("Executing SQL Query with Params: " + Arrays.toString(bindParams));
+	
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, bindParams)) {
 			if (resultSet == null) {
-    System.out.println("ResultSet is null");
-    return Collections.emptyList();
-} else {
-	System.out.println("ResultSet has");
-}
+				System.out.println("ResultSet is null");
+				return Collections.emptyList();
+			}
+	
 			List<PaymentTransaction> transactions = new ArrayList<>();
 	
-			while (resultSet != null && resultSet.next()) {
-				System.out.println("Retrieved row with amount: " + resultSet.getLong("amount"));
-
-				// Retrieve transaction fields
-				BaseTransactionData baseTransactionData = new BaseTransactionData(
-					resultSet.getLong("created_when"),  
-					resultSet.getInt("tx_group_id"),
-					resultSet.getBytes("reference"),
-					resultSet.getBytes("creator"),
-					resultSet.getLong("fee"),
-					resultSet.getBytes("signature") 
-				);
+			// Use do-while to process at least one row if available
+		
+				do {
+					System.out.println("Retrieved row with amount: " + resultSet.getLong("amount"));
 	
-				PaymentTransactionData paymentTransactionData = new PaymentTransactionData(
-					baseTransactionData,
-					resultSet.getString("recipient"),
-					resultSet.getLong("amount")
-				);
+					BaseTransactionData baseTransactionData = new BaseTransactionData(
+						resultSet.getLong("created_when"),  
+						resultSet.getInt("tx_group_id"),
+						resultSet.getBytes("reference"),
+						resultSet.getBytes("creator"),
+						resultSet.getLong("fee"),
+						resultSet.getBytes("signature")
+					);
 	
-				transactions.add(new PaymentTransaction(this.repository, paymentTransactionData));
-			}
+					PaymentTransactionData paymentTransactionData = new PaymentTransactionData(
+						baseTransactionData,
+						resultSet.getString("recipient"),
+						resultSet.getLong("amount")
+					);
+	
+					transactions.add(new PaymentTransaction(this.repository, paymentTransactionData));
+				} while (resultSet.next());
+			
+	
 			int resultCount = transactions.size();
-// You can log or debug here
-System.out.println("Number of rows returned: " + resultCount);
+			System.out.println("Number of rows returned: " + resultCount);
 			return transactions;
 		} catch (SQLException e) {
 			throw new DataException("Unable to fetch payment transactions", e);

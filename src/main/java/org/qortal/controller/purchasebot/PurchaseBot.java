@@ -63,6 +63,7 @@ public class PurchaseBot implements Listener {
     }
 
  
+    
 
     @Override
     public void listen(Event event) {
@@ -79,10 +80,14 @@ public class PurchaseBot implements Listener {
         }
 
         synchronized (this) {
+    //         int latestBlockHeight = Controller.getInstance().getChainHeight();
+    // System.out.println("New block height detected: " + latestBlockHeight);
             List<PurchaseBotData> allPurchaseBotData;
 
             try (final Repository repository = RepositoryManager.getRepository()) {
                 allPurchaseBotData = repository.getPurchaseRepository().getAllPurchaseBotData();
+                
+             
             } catch (DataException e) {
                 LOGGER.error("Couldn't run purchase bot due to repository issue", e);
                 return;
@@ -133,8 +138,16 @@ public class PurchaseBot implements Listener {
         //         .getTransactionsByRecipient(sellerAddress);
         // List<byte[]> signatures = repository.getTransactionRepository().getSignaturesMatchingCriteria(null, null, null,
         //         Collections.singletonList(TransactionType.PAYMENT), null, null, sellerAddress, TransactionsResource.ConfirmationStatus.CONFIRMED, 1, 0, true);
-        
-                List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(sellerAddress, price * 100000000,  2000000, 1);
+                int latestBlockHeight = Controller.getInstance().getChainHeight();
+                int lastSaveBlockHeight = repository.getPurchaseRepository().getSavedBlockHeight(purchaseBotData.getProductId());
+                if (lastSaveBlockHeight == 0) {
+                    lastSaveBlockHeight = latestBlockHeight - 10080;
+                }
+                System.out.println("Saved blockheight: " + lastSaveBlockHeight);
+                System.out.println("latest blockheight: " + latestBlockHeight);
+                List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(sellerAddress, price * 100000000,  lastSaveBlockHeight, latestBlockHeight);
+
+              
 
         // // // Expand signatures to transactions
         // List<TransactionData> paymentTransactions = new ArrayList<>(signatures.size());
@@ -278,15 +291,15 @@ try {
                 Thread.currentThread().interrupt(); // Restore the interrupted status
                 LOGGER.warn("Failed to acquire blockchain lock due to interruption", e);
             }
-
-            
+            deliveredTransactionSignatures.add(txSignature);
+            repository.getPurchaseRepository().updateSavedBlockHeight(purchaseBotData.getProductId(), latestBlockHeight);
     System.out.println("Serialized ChatTransactionData: " + Base58.encode(bytes));
 } catch (TransformationException e) {
     System.err.println("Failed to transform ChatTransactionData to bytes: " + e.getMessage());
 }
 
                 // Add the transaction to the delivered set to avoid reprocessing
-                deliveredTransactionSignatures.add(txSignature);
+                
             }
             // Validate payment
             // if (validatePayment(paymentTransaction, price)) {
