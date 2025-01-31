@@ -9,8 +9,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 @XmlAccessorType(XmlAccessType.FIELD)
 public class PurchaseBotCreateRequest {
 
-    @Schema(description = "Creator's public key", example = "2zR1WFsbM7akHghqSCYKBPk6LDP8aKiQSRS1FrwoLvoB")
-    public byte[] creatorPublicKey;
+    // @Schema(description = "Creator's public key", example = "2zR1WFsbM7akHghqSCYKBPk6LDP8aKiQSRS1FrwoLvoB")
+    // public byte[] creatorPublicKey;
 
     @Schema(description = "Product ID associated with the purchase", example = "PRODUCT12345")
     public String productId;

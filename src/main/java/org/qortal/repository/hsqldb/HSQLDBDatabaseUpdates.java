@@ -1058,14 +1058,14 @@ public class HSQLDBDatabaseUpdates {
 						"CREATE TABLE PurchaseBotStates ("
 						+ "private_key QortalKeySeed NOT NULL, "                // Bot's private key
 						+ "public_key QortalPublicKey NOT NULL, "              // Derived public key
-						+ "product_id VARCHAR(64) NOT NULL, "                 // Unique product identifier
+						+ "product_id VARCHAR(64) NOT NULL UNIQUE, "                 // Unique product identifier
 						+ "seller_address QortalAddress NOT NULL, "           // Seller's address
 						+ "price QortalAmount NOT NULL, "                     // Product price
 						+ "product_key TEXT NOT NULL, "                       // Product key to deliver
 						+ "state VARCHAR(32) NOT NULL, "                      // Current state of the purchase
 						+ "state_value INT NOT NULL, "                        // Numeric representation of the state
 						+ "last_payment_block_height INT, "					  // Block height of the incoming payment
-						+ "PRIMARY KEY (private_key, product_id)"             // Unique composite key
+						+ "PRIMARY KEY (private_key)"             // Unique  key
 						+ ")"
 					);
 				

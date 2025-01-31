@@ -17,7 +17,6 @@ import org.qortal.account.PrivateKeyAccount;
 import org.qortal.controller.Controller;
 import org.qortal.controller.Synchronizer;
 import org.qortal.crypto.Crypto;
-import org.qortal.data.account.AccountData;
 import org.qortal.data.purchase.PurchaseBotData;
 import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.ChatTransactionData;
@@ -127,10 +126,8 @@ public class PurchaseBot implements Listener {
         String sellerAddress = purchaseBotData.getSellerAddress();
         long price = purchaseBotData.getPrice();
         String address = Crypto.toAddress(purchaseBotData.getPublicKey());
-        AccountData accountData = repository.getAccountRepository().getAccount("QP9Jj4S3jpCgvPnaABMx8VWzND3qpji6rP");
-        byte[] publicKey = accountData.getPublicKey();
+  
 
-        LOGGER.info("publicKey={}", price);
 
       
         // Fetch payment transactions addressed to the seller
@@ -182,9 +179,9 @@ public class PurchaseBot implements Listener {
                 String recipient = paymentTransaction.getSender().getAddress(); // Replace with actual recipient address
                 byte[] chatReference = null; // Optional, replace if needed
                 byte[] data = purchaseBotData.getProductKey().getBytes(); // Your message data
-
+                byte[] recipientPublicKey = paymentTransaction.getTransactionData().getCreatorPublicKey();
                 // 1) Compute shared secret
-                byte[] sharedSecret = Crypto.getSharedSecret(purchaseBotData.getPrivateKey(), publicKey);
+                byte[] sharedSecret = Crypto.getSharedSecret(purchaseBotData.getPrivateKey(), recipientPublicKey);
 
                 System.out.println("secretHash1: " + Base64.getEncoder().encodeToString(sharedSecret));
 

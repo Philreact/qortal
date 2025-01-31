@@ -6,6 +6,7 @@ import javax.xml.bind.annotation.XmlTransient;
 import javax.xml.bind.annotation.adapters.XmlJavaTypeAdapter;
 
 import org.json.JSONObject;
+import org.qortal.crypto.Crypto;
 import org.qortal.utils.Base58;
 
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -29,14 +30,16 @@ public class PurchaseBotData {
     @Schema(hidden = true)
     private int purchaseStateValue;
 
-    private int lastPaymentBlockHeight; // Added field for last payment block height
+    private int lastPaymentBlockHeight;
+
+    private String address;
 
     protected PurchaseBotData() {
         /* JAXB */
     }
 
     public PurchaseBotData(byte[] privateKey, byte[] publicKey, String productId, String sellerAddress,
-                            long price, String productKey, String purchaseState,
+                           long price, String productKey, String purchaseState,
                            int purchaseStateValue, int lastPaymentBlockHeight) {
         this.privateKey = privateKey;
         this.publicKey = publicKey;
@@ -47,6 +50,7 @@ public class PurchaseBotData {
         this.purchaseState = purchaseState;
         this.purchaseStateValue = purchaseStateValue;
         this.lastPaymentBlockHeight = lastPaymentBlockHeight;
+        this.address = Crypto.toAddress(publicKey); // Set address during initialization
     }
 
     // Getters and Setters
@@ -98,6 +102,14 @@ public class PurchaseBotData {
         this.lastPaymentBlockHeight = lastPaymentBlockHeight;
     }
 
+    // New getter for address
+    public String getAddress() {
+        if (this.address == null && this.publicKey != null) {
+            this.address = Crypto.toAddress(this.publicKey); // Calculate dynamically
+        }
+        return this.address;
+    }    
+
     public JSONObject toJson() {
         JSONObject jsonObject = new JSONObject();
         jsonObject.put("privateKey", Base58.encode(this.getPrivateKey()));
@@ -109,11 +121,12 @@ public class PurchaseBotData {
         jsonObject.put("purchaseState", this.getPurchaseState());
         jsonObject.put("purchaseStateValue", this.getPurchaseStateValue());
         jsonObject.put("lastPaymentBlockHeight", this.getLastPaymentBlockHeight());
+        jsonObject.put("address", this.getAddress()); // Include address in JSON
         return jsonObject;
     }
 
     public static PurchaseBotData fromJson(JSONObject json) {
-        return new PurchaseBotData(
+        PurchaseBotData purchaseBotData = new PurchaseBotData(
                 json.isNull("privateKey") ? null : Base58.decode(json.getString("privateKey")),
                 json.isNull("publicKey") ? null : Base58.decode(json.getString("publicKey")),
                 json.getString("productId"),
@@ -122,14 +135,20 @@ public class PurchaseBotData {
                 json.getString("productKey"),
                 json.getString("purchaseState"),
                 json.getInt("purchaseStateValue"),
-                json.optInt("lastPaymentBlockHeight", 0) // Handle optional field with default
+                json.optInt("lastPaymentBlockHeight", 0)
         );
+
+        // Manually set address if available
+        if (json.has("address")) {
+            purchaseBotData.address = json.getString("address");
+        }
+
+        return purchaseBotData;
     }
 
-    // Mostly for debugging
     @Override
     public String toString() {
-        return String.format("Product ID: %s, State: %s (%d), Last Payment Block: %d",
-                this.productId, this.purchaseState, this.purchaseStateValue, this.lastPaymentBlockHeight);
+        return String.format("Product ID: %s, State: %s (%d), Address: %s, Last Payment Block: %d",
+                this.productId, this.purchaseState, this.purchaseStateValue, this.getAddress(), this.lastPaymentBlockHeight);
     }
 }

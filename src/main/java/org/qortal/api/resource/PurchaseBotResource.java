@@ -12,14 +12,12 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 
-import org.qortal.account.PublicKeyAccount;
 import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.PurchaseBotCreateRequest;
 import org.qortal.controller.purchasebot.PurchaseBot;
-import org.qortal.crypto.Crypto;
 import org.qortal.data.purchase.PurchaseBotData;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
@@ -103,15 +101,15 @@ public String createPurchaseBot(@HeaderParam(Security.API_KEY_HEADER) String api
 
     try (final Repository repository = RepositoryManager.getRepository()) {
         // Basic validation
-        PublicKeyAccount creatorAccount = new PublicKeyAccount(repository, purchaseRequest.creatorPublicKey);
-        if (creatorAccount.getAddress() == null)
-            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_PUBLIC_KEY);
+        // PublicKeyAccount creatorAccount = new PublicKeyAccount(repository, purchaseRequest.creatorPublicKey);
+        // if (creatorAccount.getAddress() == null)
+        //     throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_PUBLIC_KEY);
 
         byte[] tradePrivateKey = PurchaseBot.generateTradePrivateKey();
 
 		byte[] tradeNativePublicKey = PurchaseBot.deriveTradeNativePublicKey(tradePrivateKey);
 
-		String tradeNativeAddress = Crypto.toAddress(tradeNativePublicKey);
+		// String tradeNativeAddress = Crypto.toAddress(tradeNativePublicKey);
         // Map request to database object
         PurchaseBotData purchaseBotData = new PurchaseBotData(
             tradePrivateKey,
