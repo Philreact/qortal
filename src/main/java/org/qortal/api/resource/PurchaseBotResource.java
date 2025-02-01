@@ -76,59 +76,70 @@ public class PurchaseBotResource {
     }
 
     @POST
-@Path("/create")
-@Operation(
-    summary = "Create a purchase-bot entry",
-    requestBody = @RequestBody(
-        required = true,
-        content = @Content(
-            mediaType = MediaType.APPLICATION_JSON,
-            schema = @Schema(
-                implementation = PurchaseBotCreateRequest.class
+    @Path("/create")
+    @Operation(
+        summary = "Create or update a purchase-bot entry",
+        requestBody = @RequestBody(
+            required = true,
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON,
+                schema = @Schema(
+                    implementation = PurchaseBotCreateRequest.class
+                )
             )
-        )
-    ),
-    responses = {
-        @ApiResponse(
-            content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
-        )
+        ),
+        responses = {
+            @ApiResponse(
+                content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+            )
+        }
+    )
+    @ApiErrors({ApiError.INVALID_PUBLIC_KEY, ApiError.REPOSITORY_ISSUE})
+    @SecurityRequirement(name = "apiKey")
+    public String createOrUpdatePurchaseBot(@HeaderParam(Security.API_KEY_HEADER) String apiKey, PurchaseBotCreateRequest purchaseRequest) {
+        Security.checkApiCallAllowed(request);
+    
+        try (final Repository repository = RepositoryManager.getRepository()) {
+            // Check if an entry with the same productId already exists
+            PurchaseBotData existingPurchaseBot = repository.getPurchaseRepository().getPurchaseBotData(purchaseRequest.productId);
+    
+            byte[] tradePrivateKey;
+            byte[] tradeNativePublicKey;
+            int lastPaymentBlockHeight = 0; // Default if no previous record exists
+    
+            if (existingPurchaseBot != null) {
+                // Entry exists, reuse existing keys and last payment block height
+                tradePrivateKey = existingPurchaseBot.getPrivateKey();
+                tradeNativePublicKey = existingPurchaseBot.getPublicKey();
+                lastPaymentBlockHeight = existingPurchaseBot.getLastPaymentBlockHeight(); // Preserve last payment height
+            } else {
+                // Entry does not exist, generate new keys
+                tradePrivateKey = PurchaseBot.generateTradePrivateKey();
+                tradeNativePublicKey = PurchaseBot.deriveTradeNativePublicKey(tradePrivateKey);
+            }
+    
+            // Create or update the purchase-bot data
+            PurchaseBotData purchaseBotData = new PurchaseBotData(
+                tradePrivateKey,
+                tradeNativePublicKey,
+                purchaseRequest.productId,
+                purchaseRequest.sellerAddress,
+                purchaseRequest.price,
+                purchaseRequest.productKey,
+                "WAITING_FOR_PAYMENT", // Default initial state
+                PurchaseBot.State.resolveStateValue("WAITING_FOR_PAYMENT"),
+                lastPaymentBlockHeight // Retain last payment block height if updating
+            );
+    
+            // Save purchase-bot data (insert if new, update if exists)
+            repository.getPurchaseRepository().save(purchaseBotData);
+            repository.saveChanges();
+    
+            return existingPurchaseBot != null ? "PurchaseBot updated successfully" : "PurchaseBot created successfully";
+        } catch (DataException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+        }
     }
-)
-@ApiErrors({ApiError.INVALID_PUBLIC_KEY, ApiError.REPOSITORY_ISSUE})
-@SecurityRequirement(name = "apiKey")
-public String createPurchaseBot(@HeaderParam(Security.API_KEY_HEADER) String apiKey, PurchaseBotCreateRequest purchaseRequest) {
-    Security.checkApiCallAllowed(request);
-
-    try (final Repository repository = RepositoryManager.getRepository()) {
-        // Basic validation
-        // PublicKeyAccount creatorAccount = new PublicKeyAccount(repository, purchaseRequest.creatorPublicKey);
-        // if (creatorAccount.getAddress() == null)
-        //     throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_PUBLIC_KEY);
-
-        byte[] tradePrivateKey = PurchaseBot.generateTradePrivateKey();
-
-		byte[] tradeNativePublicKey = PurchaseBot.deriveTradeNativePublicKey(tradePrivateKey);
-
-		// String tradeNativeAddress = Crypto.toAddress(tradeNativePublicKey);
-        // Map request to database object
-        PurchaseBotData purchaseBotData = new PurchaseBotData(
-            tradePrivateKey,
-            tradeNativePublicKey,
-            purchaseRequest.productId,
-            purchaseRequest.sellerAddress,
-            purchaseRequest.price,
-            purchaseRequest.productKey,
-            "WAITING_FOR_PAYMENT", // Default initial state
-            PurchaseBot.State.resolveStateValue("WAITING_FOR_PAYMENT"),
-            0
-        );
-
-        // Save purchase-bot data
-        repository.getPurchaseRepository().save(purchaseBotData);
-        repository.saveChanges();
-        return "PurchaseBot created successfully";
-    } catch (DataException e) {
-        throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
-    }
-}
+    
+    
 }

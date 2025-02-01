@@ -161,10 +161,10 @@ public class PurchaseBot implements Listener {
 
             // Check if this transaction has already been delivered
             synchronized (deliveredTransactionSignatures) {
-                if (deliveredTransactionSignatures.contains(txSignature)) {
-                    // LOGGER.info("Transaction already delivered: signature={}", txSignature);
-                    continue;
-                }
+                // if (deliveredTransactionSignatures.contains(txSignature)) {
+                //     // LOGGER.info("Transaction already delivered: signature={}", txSignature);
+                //     continue;
+                // }
                 byte[] reference = new byte[64];
                 new Random().nextBytes(reference);
 
@@ -288,8 +288,8 @@ try {
                 Thread.currentThread().interrupt(); // Restore the interrupted status
                 LOGGER.warn("Failed to acquire blockchain lock due to interruption", e);
             }
-            deliveredTransactionSignatures.add(txSignature);
-            repository.getPurchaseRepository().updateSavedBlockHeight(purchaseBotData.getProductId(), latestBlockHeight);
+            // deliveredTransactionSignatures.add(txSignature);
+            
     System.out.println("Serialized ChatTransactionData: " + Base58.encode(bytes));
 } catch (TransformationException e) {
     System.err.println("Failed to transform ChatTransactionData to bytes: " + e.getMessage());
@@ -304,7 +304,7 @@ try {
             //     return;
             // }
         }
-
+        repository.getPurchaseRepository().updateSavedBlockHeight(purchaseBotData.getProductId(), latestBlockHeight);
         LOGGER.debug("No valid payment transactions found for seller: {}", sellerAddress);
     }
 
