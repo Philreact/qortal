@@ -8,6 +8,8 @@ import org.qortal.arbitrary.metadata.ArbitraryDataTransactionMetadata;
 import org.qortal.arbitrary.misc.Category;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.controller.arbitrary.ArbitraryDataManager;
+import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
+
 import org.qortal.data.arbitrary.ArbitraryResourceCache;
 import org.qortal.data.arbitrary.ArbitraryResourceData;
 import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
@@ -16,6 +18,8 @@ import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.ArbitraryTransactionData.Compression;
 import org.qortal.data.transaction.ArbitraryTransactionData.DataType;
 import org.qortal.data.transaction.ArbitraryTransactionData.Method;
+import org.qortal.transaction.Transaction.TransactionType;
+
 import org.qortal.data.transaction.BaseTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.ArbitraryRepository;
@@ -32,6 +36,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+
+import org.qortal.api.resource.TransactionsResource;
+import org.qortal.transaction.Transaction;
 
 public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 
@@ -1231,4 +1238,140 @@ public class HSQLDBArbitraryRepository implements ArbitraryRepository {
 			throw new DataException("Unable to delete account from repository", e);
 		}
 	}
+
+    @Override
+public List<byte[]> getArbitraryTransactionsWithFields(
+        Integer startBlock, Integer blockLimit, Service service, String identifier, String address,
+        ConfirmationStatus confirmationStatus, Integer limit, Integer offset, Boolean reverse) throws DataException {
+
+    List<byte[]> signatures = new ArrayList<>();
+    boolean hasAddress = address != null && !address.isEmpty();
+    boolean hasIdentifier = identifier != null && !identifier.isEmpty();
+    boolean hasHeightRange = startBlock != null || blockLimit != null;
+
+    // Ensure valid block height filtering
+    if (hasHeightRange && startBlock == null) {
+        startBlock = (reverse == null || !reverse) ? 1 : this.repository.getBlockRepository().getBlockchainHeight() - blockLimit;
+    }
+
+    if (reverse == null) {
+        reverse = false; // Default value
+    }
+
+    String signatureColumn = "Transactions.signature";
+    List<String> whereClauses = new ArrayList<>();
+    String groupBy = null;
+    List<Object> bindParams = new ArrayList<>();
+
+    // Tables, starting with Transactions
+    StringBuilder tables = new StringBuilder(256);
+    tables.append("Transactions");
+
+    if (hasAddress) {
+        tables.append(" JOIN TransactionParticipants ON TransactionParticipants.signature = Transactions.signature");
+        groupBy = " GROUP BY TransactionParticipants.signature, Transactions.created_when";
+        signatureColumn = "TransactionParticipants.signature";
+    }
+
+    if (service != null || identifier != null) {
+        tables.append(" LEFT OUTER JOIN ArbitraryTransactions ON ArbitraryTransactions.signature = Transactions.signature");
+    }
+
+    // ✅ Confirmation status filtering
+    switch (confirmationStatus) {
+        case BOTH:
+            break; // No filter needed
+        case CONFIRMED:
+            whereClauses.add("Transactions.block_height IS NOT NULL");
+            break;
+        case UNCONFIRMED:
+            whereClauses.add("Transactions.block_height IS NULL");
+            break;
+    }
+
+    // ✅ Block height range - only apply for CONFIRMED transactions
+    if (hasHeightRange && confirmationStatus == ConfirmationStatus.CONFIRMED) {
+        whereClauses.add("Transactions.block_height >= ?");
+        bindParams.add(startBlock);
+
+        if (blockLimit != null) {
+            whereClauses.add("Transactions.block_height < ?");
+            bindParams.add(startBlock + blockLimit);
+        }
+    }
+
+    // ✅ Transaction Type filter - Ensure it's valid
+	StringBuilder txTypeFilter = new StringBuilder("Transactions.type IN (");
+	txTypeFilter.append(TransactionType.ARBITRARY.value); // Single type
+	txTypeFilter.append(")");
+	
+	whereClauses.add(txTypeFilter.toString());
+
+    // ✅ Service & Identifier filtering
+    if (service != null) {
+        whereClauses.add("ArbitraryTransactions.service = ?");
+        bindParams.add(service.value);
+    }
+
+    if (hasIdentifier) {
+        whereClauses.add("ArbitraryTransactions.identifier = ?");
+        bindParams.add(identifier);
+    }
+
+    // ✅ Address filtering
+    if (hasAddress) {
+        whereClauses.add("TransactionParticipants.participant = ?");
+        bindParams.add(address);
+    }
+
+    // ✅ Construct SQL query
+    StringBuilder sql = new StringBuilder(1024);
+    sql.append("SELECT ");
+    sql.append(signatureColumn);
+    sql.append(" FROM ");
+    sql.append(tables);
+
+	if (!whereClauses.isEmpty()) {
+		sql.append(" WHERE ");
+
+		final int whereClausesSize = whereClauses.size();
+		for (int wci = 0; wci < whereClausesSize; ++wci) {
+			if (wci != 0)
+				sql.append(" AND ");
+
+			sql.append(whereClauses.get(wci));
+		}
+	}
+
+    if (groupBy != null) {
+        sql.append(groupBy);
+    }
+
+    sql.append(" ORDER BY Transactions.created_when");
+    sql.append(reverse ? " DESC" : " ASC");
+
+    HSQLDBRepository.limitOffsetSql(sql, limit, offset);
+
+    // ✅ Debugging logs
+    LOGGER.info("Executing SQL: {}", sql.toString());
+    LOGGER.info("With bind parameters: {}", bindParams);
+
+    // ✅ Execute SQL
+    try (ResultSet resultSet = this.repository.checkedExecute(sql.toString(), bindParams.toArray())) {
+        if (resultSet == null) {
+            return signatures;
+        }
+
+        do {
+            byte[] signature = resultSet.getBytes(1);
+            signatures.add(signature);
+        } while (resultSet.next());
+
+        return signatures;
+    } catch (SQLException e) {
+        LOGGER.error("SQL Error fetching transactions: {}", e.getMessage(), e);
+        throw new DataException("Unable to fetch matching transaction signatures from repository", e);
+    }
+}
+
 }

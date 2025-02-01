@@ -396,6 +396,65 @@ public class ArbitraryResource {
 		}
 	}
 
+	@GET
+	@Path("/fieldSearch")
+	@Operation(
+		summary = "Find matching arbitrary transactions",
+		description = "Returns transactions that match criteria, with the added option of filtering by identifier. Block height ranges allowed when searching CONFIRMED transactions ONLY.",
+		responses = {
+			@ApiResponse(
+				description = "transactions",
+				content = @Content(
+					array = @ArraySchema(
+						schema = @Schema(
+							implementation = TransactionData.class
+						)
+					)
+				)
+			)
+		}
+	)
+	@ApiErrors({
+		ApiError.INVALID_CRITERIA, ApiError.REPOSITORY_ISSUE
+	})
+	public List<TransactionData> searchTransactionsWithFields(@QueryParam("startBlock") Integer startBlock, @QueryParam("blockLimit") Integer blockLimit,
+			@QueryParam("service") Service service,
+			@QueryParam("identifier") String identifier,
+			@QueryParam("address") String address, @Parameter(
+				description = "whether to include confirmed, unconfirmed or both",
+				required = true
+			) @QueryParam("confirmationStatus") ConfirmationStatus confirmationStatus, @Parameter(
+				ref = "limit"
+			) @QueryParam("limit") Integer limit, @Parameter(
+				ref = "offset"
+			) @QueryParam("offset") Integer offset, @Parameter(
+				ref = "reverse"
+			) @QueryParam("reverse") Boolean reverse) {
+		// Must have at least one of txType / address / limit <= 20
+		if (service == null && (address == null || address.isEmpty()) && (limit == null || limit > 20))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+
+		// You can't ask for unconfirmed and impose a block height range
+		if (confirmationStatus != ConfirmationStatus.CONFIRMED && (startBlock != null || blockLimit != null))
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA);
+
+	
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<byte[]> signatures = repository.getArbitraryRepository().getArbitraryTransactionsWithFields(startBlock, blockLimit, service,  identifier, address,
+			confirmationStatus, limit, offset, reverse);
+
+			// Expand signatures to transactions
+			List<TransactionData> transactions = new ArrayList<>(signatures.size());
+			for (byte[] signature : signatures)
+				transactions.add(repository.getTransactionRepository().fromSignature(signature));
+
+			return transactions;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
 	@POST
 	@Operation(
 		summary = "Build raw, unsigned, ARBITRARY transaction",

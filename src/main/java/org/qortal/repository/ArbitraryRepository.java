@@ -7,8 +7,11 @@ import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.ArbitraryTransactionData.Method;
+import org.qortal.api.resource.TransactionsResource.ConfirmationStatus;
 
 import java.util.List;
+
+
 
 public interface ArbitraryRepository {
 
@@ -26,6 +29,8 @@ public interface ArbitraryRepository {
 	public void delete(ArbitraryTransactionData arbitraryTransactionData) throws DataException;
 
 	public List<ArbitraryTransactionData> getArbitraryTransactions(String name, Service service, String identifier, long since) throws DataException;
+	public List<byte[]> getArbitraryTransactionsWithFields(Integer startBlock, Integer blockLimit, Service service, String identifier, String address,
+	ConfirmationStatus confirmationStatus, Integer limit, Integer offset, Boolean reverse) throws DataException;
 
 	public ArbitraryTransactionData getInitialTransaction(String name, Service service, Method method, String identifier) throws DataException;
 
