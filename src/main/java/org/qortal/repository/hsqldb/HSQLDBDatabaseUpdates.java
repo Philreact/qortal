@@ -1057,32 +1057,34 @@ public class HSQLDBDatabaseUpdates {
 					// 1Create PurchaseBotStores table (each seller can have multiple stores)
 					stmt.execute(
 						"CREATE TABLE IF NOT EXISTS PurchaseBotStores ("
-						+ "store_id VARCHAR(64) NOT NULL UNIQUE, "   // Unique store identifier
-						+ "store_name VARCHAR(128) NOT NULL, "       // Store's name
-						+ "store_description TEXT, "                 // Store description
-						+ "seller_address QortalAddress NOT NULL, "  // Store owner's address
-						+ "PRIMARY KEY (store_id)"
+						+ "store_id VARCHAR(64) NOT NULL PRIMARY KEY, " // Store ID as the primary key
+						+ "store_name VARCHAR(128) NOT NULL, "         // Store's name
+						+ "store_description TEXT, "                  // Store description
+						+ "seller_address QortalAddress NOT NULL "    // Store owner's address
 						+ ")"
 					);
+
 				
 					// Create PurchaseBotProducts table (Products are now tied to stores)
 					stmt.execute(
 						"CREATE TABLE IF NOT EXISTS PurchaseBotProducts ("
-						+ "private_key QortalKeySeed NOT NULL, "     // Bot's private key
-						+ "public_key QortalPublicKey NOT NULL, "    // Derived public key
-						+ "product_id VARCHAR(64) NOT NULL UNIQUE, " // Unique product identifier
-						+ "store_id VARCHAR(64) NOT NULL, "          // Store association
-						+ "seller_address QortalAddress NOT NULL, "  // Seller's address
-						+ "price QortalAmount NOT NULL, "            // Product price
-						+ "product_key TEXT NOT NULL, "              // Product key to deliver
-						+ "product_description TEXT, "               // Product description
-						+ "state VARCHAR(32) NOT NULL, "             // Current state of the purchase
-						+ "state_value INT NOT NULL, "               // Numeric representation of the state
-						+ "last_payment_block_height INT, "          // Block height of the incoming payment
-						+ "PRIMARY KEY (product_id), "
+						+ "product_id VARCHAR(64) NOT NULL PRIMARY KEY, " // Use PRIMARY KEY directly
+						+ "public_key QortalPublicKey NOT NULL, "
+						+ "private_key QortalKeySeed NOT NULL, "
+						+ "store_id VARCHAR(64) NOT NULL, "
+						+ "seller_address QortalAddress NOT NULL, "
+						+ "price QortalAmount NOT NULL, "
+						+ "product_key TEXT NOT NULL, "
+						+ "product_description TEXT, "
+						+ "state VARCHAR(32) NOT NULL, "
+						+ "state_value INT NOT NULL, "
+						+ "last_payment_block_height INT, "
 						+ "FOREIGN KEY (store_id) REFERENCES PurchaseBotStores(store_id) ON DELETE CASCADE"
 						+ ")"
 					);
+					
+
+
 				
 					// 3️⃣ Create indexes to optimize queries
 					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStoreIndex ON PurchaseBotProducts (store_id)");

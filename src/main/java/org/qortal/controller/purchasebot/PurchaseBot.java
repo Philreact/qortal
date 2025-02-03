@@ -84,7 +84,7 @@ public class PurchaseBot implements Listener {
             List<PurchaseBotData> allPurchaseBotData;
 
             try (final Repository repository = RepositoryManager.getRepository()) {
-                allPurchaseBotData = repository.getPurchaseRepository().getAllPurchaseBotData();
+                allPurchaseBotData = repository.getPurchaseRepository().getAllPurchaseBotData(null);
                 
              
             } catch (DataException e) {

@@ -14,7 +14,7 @@ public interface PurchaseRepository {
      * @return PurchaseBotData object containing purchase details, or null if not found.
      * @throws DataException if a data access error occurs.
      */
-    PurchaseBotData getPurchaseBotData(String purchaseId) throws DataException;
+    PurchaseBotData getPurchaseBotData(String productId) throws DataException;
 
     /**
      * Returns true if there is an existing purchase-bot entry relating to the given product ID,
@@ -29,11 +29,14 @@ public interface PurchaseRepository {
 
     /**
      * Retrieves all purchase-bot data stored in the repository.
+     * If a storeId is provided, retrieves only products from that store.
      *
-     * @return List of all PurchaseBotData objects.
+     * @param storeId (Optional) Store ID to filter products by.
+     * @return List of PurchaseBotData objects.
      * @throws DataException if a data access error occurs.
      */
-    List<PurchaseBotData> getAllPurchaseBotData() throws DataException;
+    List<PurchaseBotData> getAllPurchaseBotData(String storeId) throws DataException;
+
 
     /**
      * Saves the given purchase-bot data to the repository.
@@ -62,5 +65,5 @@ public interface PurchaseRepository {
 
     PurchaseStoreData getStoreData(String storeId) throws DataException;
 
-    List<PurchaseStoreData> getAllStores() throws DataException;
+    List<PurchaseStoreData> getAllStores(String sellerAddress) throws DataException;
 }

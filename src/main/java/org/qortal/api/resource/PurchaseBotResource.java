@@ -1,7 +1,6 @@
 package org.qortal.api.resource;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -19,6 +18,7 @@ import org.qortal.api.Security;
 import org.qortal.api.model.PurchaseBotCreateRequest;
 import org.qortal.api.model.PurchaseStoreCreateRequest;
 import org.qortal.controller.purchasebot.PurchaseBot;
+import org.qortal.crypto.Crypto;
 import org.qortal.data.purchase.PurchaseBotData;
 import org.qortal.data.purchase.PurchaseStoreData;
 import org.qortal.repository.DataException;
@@ -41,9 +41,12 @@ public class PurchaseBotResource {
     @Context
     HttpServletRequest request;
 
+
     @GET
+    @Path("/products")
     @Operation(
         summary = "List current purchase-bot states",
+        description = "Retrieves all purchase-bot data. Supports filtering by state and store.",
         responses = {
             @ApiResponse(
                 content = @Content(
@@ -60,18 +63,46 @@ public class PurchaseBotResource {
     @SecurityRequirement(name = "apiKey")
     public List<PurchaseBotData> getPurchaseBotStates(
             @HeaderParam(Security.API_KEY_HEADER) String apiKey,
-            @QueryParam("state") String state) {
+            @QueryParam("storeId") String storeId) {  // 🆕 Allow filtering by store ID
         Security.checkApiCallAllowed(request);
 
         try (final Repository repository = RepositoryManager.getRepository()) {
-            List<PurchaseBotData> allPurchaseBotData = repository.getPurchaseRepository().getAllPurchaseBotData();
+            List<PurchaseBotData> purchaseBotDataList = repository.getPurchaseRepository().getAllPurchaseBotData(storeId);
 
-            if (state == null)
-                return allPurchaseBotData;
+            return purchaseBotDataList;
+        } catch (DataException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+        }
+    }
 
-            return allPurchaseBotData.stream()
-                    .filter(purchaseBotData -> purchaseBotData.getPurchaseState().equalsIgnoreCase(state))
-                    .collect(Collectors.toList());
+    @GET
+    @Path("/stores")
+    @Operation(
+        summary = "List current stores on the node",
+        description = "Retrieves all store data. Supports filtering by seller address.",
+        responses = {
+            @ApiResponse(
+                content = @Content(
+                    array = @ArraySchema(
+                        schema = @Schema(
+                            implementation = PurchaseBotData.class
+                        )
+                    )
+                )
+            )
+        }
+    )
+    @ApiErrors({ApiError.REPOSITORY_ISSUE})
+    @SecurityRequirement(name = "apiKey")
+    public List<PurchaseStoreData> getStoreList(
+            @HeaderParam(Security.API_KEY_HEADER) String apiKey,
+            @QueryParam("sellerAddress") String sellerAddress) {  // 🆕 Allow filtering by sellerAddress
+        Security.checkApiCallAllowed(request);
+                
+        try (final Repository repository = RepositoryManager.getRepository()) {
+            List<PurchaseStoreData> storeList = repository.getPurchaseRepository().getAllStores(sellerAddress);
+
+            return storeList;
         } catch (DataException e) {
             throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
         }
@@ -113,24 +144,27 @@ public class PurchaseBotResource {
     
             byte[] tradePrivateKey;
             byte[] tradeNativePublicKey;
+            String tradeNativeAddress;
             int lastPaymentBlockHeight = 0; // Default if no previous record exists
     
             if (existingPurchaseBot != null) {
                 // Entry exists, reuse existing keys and last payment block height
                 tradePrivateKey = existingPurchaseBot.getPrivateKey();
                 tradeNativePublicKey = existingPurchaseBot.getPublicKey();
+                tradeNativeAddress = Crypto.toAddress(tradeNativePublicKey);
                 lastPaymentBlockHeight = existingPurchaseBot.getLastPaymentBlockHeight(); // Preserve last payment height
             } else {
                 // Entry does not exist, generate new keys
                 tradePrivateKey = PurchaseBot.generateTradePrivateKey();
                 tradeNativePublicKey = PurchaseBot.deriveTradeNativePublicKey(tradePrivateKey);
+                tradeNativeAddress = Crypto.toAddress(tradeNativePublicKey);
             }
     
             // 3️⃣ Create or update the purchase-bot data
             PurchaseBotData purchaseBotData = new PurchaseBotData(
                 tradePrivateKey,
                 tradeNativePublicKey,
-                purchaseRequest.productId,
+                tradeNativeAddress,
                 purchaseRequest.storeId, // Store ID added
                 purchaseRequest.sellerAddress,
                 purchaseRequest.price,

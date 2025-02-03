@@ -2,13 +2,9 @@ package org.qortal.data.purchase;
 
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
-import javax.xml.bind.annotation.XmlTransient;
 
 import org.json.JSONObject;
-import org.qortal.crypto.Crypto;
-import org.qortal.utils.Base58;
 
-import io.swagger.v3.oas.annotations.media.Schema;
 
 @XmlAccessorType(XmlAccessType.FIELD)
 public class PurchaseStoreData {
@@ -18,9 +14,6 @@ public class PurchaseStoreData {
     private String sellerAddress;
     private String storeDescription;
     
-    @XmlTransient
-    @Schema(hidden = true)
-    private String address;
 
     protected PurchaseStoreData() {
         /* JAXB */
@@ -31,7 +24,6 @@ public class PurchaseStoreData {
         this.storeName = storeName; // 🆕 Assign store name
         this.sellerAddress = sellerAddress;
         this.storeDescription = storeDescription;
-        this.address = Crypto.toAddress(Base58.decode(sellerAddress)); // Compute address
     }
 
     // Getters and Setters
@@ -67,20 +59,12 @@ public class PurchaseStoreData {
         this.storeDescription = storeDescription;
     }
 
-    public String getAddress() {
-        if (this.address == null && this.sellerAddress != null) {
-            this.address = Crypto.toAddress(Base58.decode(this.sellerAddress)); // Compute dynamically
-        }
-        return this.address;
-    }
-
     public JSONObject toJson() {
         JSONObject jsonObject = new JSONObject();
         jsonObject.put("storeId", this.getStoreId());
         jsonObject.put("storeName", this.getStoreName()); // 🆕 Include store name in JSON
         jsonObject.put("sellerAddress", this.getSellerAddress());
         jsonObject.put("storeDescription", this.getStoreDescription());
-        jsonObject.put("address", this.getAddress()); // Include address in JSON
         return jsonObject;
     }
 
