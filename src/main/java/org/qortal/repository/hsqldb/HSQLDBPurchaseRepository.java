@@ -1,15 +1,31 @@
 package org.qortal.repository.hsqldb;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
+import org.qortal.account.Account;
+import org.qortal.account.PrivateKeyAccount;
+import org.qortal.asset.Asset;
+import org.qortal.controller.Controller;
 import org.qortal.data.purchase.PurchaseBotData;
 import org.qortal.data.purchase.PurchaseStoreData;
+import org.qortal.data.transaction.BaseTransactionData;
+import org.qortal.data.transaction.PaymentTransactionData;
+import org.qortal.data.transaction.TransactionData;
+import org.qortal.group.Group;
 import org.qortal.repository.DataException;
 import org.qortal.repository.PurchaseRepository;
+import org.qortal.transaction.Transaction;
+import org.qortal.transform.TransformationException;
+import org.qortal.transform.transaction.TransactionTransformer;
 
 public class HSQLDBPurchaseRepository implements PurchaseRepository {
 
@@ -18,7 +34,7 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     public HSQLDBPurchaseRepository(HSQLDBRepository repository) {
         this.repository = repository;
     }
-
+    
     @Override
     public PurchaseBotData getPurchaseBotData(String purchaseId) throws DataException {
         String sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
@@ -295,6 +311,97 @@ public List<PurchaseStoreData> getAllStores(String sellerAddressParam) throws Da
     } catch (SQLException e) {
         throw new DataException("Unable to fetch all store data from repository", e);
     }
+}
+
+@Override
+public long cashOut() throws DataException {
+    List<PurchaseBotData> allPurchaseBotData = getAllPurchaseBotData(null);
+    long totalAmount = 0; // Initialize totalAmount
+
+    for (PurchaseBotData purchaseBotData : allPurchaseBotData) {
+        try  {
+            Account account = new Account(this.repository, purchaseBotData.getAddress());
+            long assetId = Asset.QORT;
+            long timestamp = System.currentTimeMillis();
+            long balance = account.getConfirmedBalance(assetId);
+            System.out.println("balance: " + balance);
+            Transaction.TransactionType txType = Transaction.TransactionType.PAYMENT;
+            Constructor<?> constructor = txType.constructor;
+            Transaction transaction;
+
+            try {
+                transaction = (Transaction) constructor.newInstance(null, null);
+            } catch (InvocationTargetException | IllegalAccessException | InstantiationException e) {
+                continue;
+            }
+
+            long fee = transaction.getUnitFee(timestamp);
+            long balanceToSend = balance - fee;
+            System.out.println("balanceToSend: " + balanceToSend);
+            if (balanceToSend <= 0) {
+                continue; // Skip if no balance to cash out
+            }
+
+           
+            byte[] reference = new byte[64];
+            new Random().nextBytes(reference);
+
+            BaseTransactionData baseTransactionData = new BaseTransactionData(
+                timestamp,
+                Group.NO_GROUP,
+                reference,
+                purchaseBotData.getPublicKey(),
+                fee,
+                null
+            );
+
+            TransactionData paymentTransactionData = new PaymentTransactionData(
+                baseTransactionData,
+                purchaseBotData.getSellerAddress(),
+                balanceToSend
+            );
+
+            PrivateKeyAccount signer = new PrivateKeyAccount(null, purchaseBotData.getPrivateKey());
+
+            transaction = Transaction.fromData(null, paymentTransactionData);
+            transaction.sign(signer);
+
+            byte[] signedBytes = TransactionTransformer.toBytes(paymentTransactionData);
+            TransactionData transactionData = TransactionTransformer.fromBytes(signedBytes);
+            transaction = Transaction.fromData(this.repository, transactionData);
+
+            if (!transaction.isSignatureValid()) {
+                continue;
+            }
+
+            ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();
+
+            try {
+                if (!blockchainLock.tryLock(60, TimeUnit.SECONDS)) {
+                    continue;
+                }
+
+                try {
+                    Transaction.ValidationResult result = transaction.importAsUnconfirmed();
+                    if (result != Transaction.ValidationResult.OK) {
+                        continue;
+                    }
+
+                    // Add the balance to totalAmount if successful
+                    totalAmount += balanceToSend;
+
+                } finally {
+                    blockchainLock.unlock(); // Always unlock in the finally block
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt(); // Restore the interrupted status
+            }
+        } catch (DataException | TransformationException e) {
+            throw new DataException("Unable to perform cashout", e);
+        }
+    }
+
+    return totalAmount; // Return the total amount cashed out
 }
 
     

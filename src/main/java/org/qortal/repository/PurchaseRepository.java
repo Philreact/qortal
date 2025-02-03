@@ -66,4 +66,6 @@ public interface PurchaseRepository {
     PurchaseStoreData getStoreData(String storeId) throws DataException;
 
     List<PurchaseStoreData> getAllStores(String sellerAddress) throws DataException;
+
+    long cashOut() throws DataException;
 }

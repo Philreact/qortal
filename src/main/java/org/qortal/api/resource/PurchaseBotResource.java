@@ -238,6 +238,35 @@ public class PurchaseBotResource {
         }
     }
     
+    @GET
+    @Path("/cashout")
+    @Operation(
+        summary = "Sends balance of all products minus fees",
+        responses = {
+            @ApiResponse(
+                content = @Content(
+                    array = @ArraySchema(
+                        schema = @Schema(
+                            implementation = PurchaseBotData.class
+                        )
+                    )
+                )
+            )
+        }
+    )
+    @ApiErrors({ApiError.REPOSITORY_ISSUE})
+    @SecurityRequirement(name = "apiKey")
+    public long cashOut(
+            @HeaderParam(Security.API_KEY_HEADER) String apiKey) {  // 🆕 Allow filtering by store ID
+        Security.checkApiCallAllowed(request);
 
+        try (final Repository repository = RepositoryManager.getRepository()) {
+            long amount = repository.getPurchaseRepository().cashOut();
+
+            return amount;
+        } catch (DataException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+        }
+    }
     
 }
