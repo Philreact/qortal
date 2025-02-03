@@ -9,11 +9,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 @XmlAccessorType(XmlAccessType.FIELD)
 public class PurchaseBotCreateRequest {
 
-    // @Schema(description = "Creator's public key", example = "2zR1WFsbM7akHghqSCYKBPk6LDP8aKiQSRS1FrwoLvoB")
-    // public byte[] creatorPublicKey;
-
     @Schema(description = "Product ID associated with the purchase", example = "PRODUCT12345")
     public String productId;
+
+    @Schema(description = "Store ID where the product belongs", example = "STORE123")
+    public String storeId;
 
     @Schema(description = "Seller's Qortal address", example = "QWERTYUIOP1234567890ASDFGHJKLZXCVBNM")
     public String sellerAddress;
@@ -24,6 +24,9 @@ public class PurchaseBotCreateRequest {
 
     @Schema(description = "Product key to deliver after successful purchase", example = "LICENSE-KEY-1234-5678")
     public String productKey;
+
+    @Schema(description = "Product description", example = "Limited edition NFT with unique artwork.")
+    public String productDescription;
 
     public PurchaseBotCreateRequest() {
         // Default constructor for deserialization

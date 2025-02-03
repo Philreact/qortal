@@ -3,6 +3,7 @@ package org.qortal.repository;
 import java.util.List;
 
 import org.qortal.data.purchase.PurchaseBotData;
+import org.qortal.data.purchase.PurchaseStoreData;
 
 public interface PurchaseRepository {
 
@@ -54,4 +55,12 @@ public interface PurchaseRepository {
     void updateSavedBlockHeight(String productId, int blockHeight) throws DataException;
 
     int getSavedBlockHeight(String productId) throws DataException;
+
+    boolean doesStoreExist(String storeId) throws DataException;
+
+    void saveStore(PurchaseStoreData purchaseStoreData) throws DataException;
+
+    PurchaseStoreData getStoreData(String storeId) throws DataException;
+
+    List<PurchaseStoreData> getAllStores() throws DataException;
 }

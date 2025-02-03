@@ -3,6 +3,7 @@ package org.qortal.api.resource;
 import com.google.common.primitives.Bytes;
 import com.j256.simplemagic.ContentInfo;
 import com.j256.simplemagic.ContentInfoUtil;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
@@ -12,6 +13,7 @@ import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import javax.ws.rs.core.Response;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.logging.log4j.LogManager;
@@ -59,6 +61,7 @@ import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -71,6 +74,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+
+import org.qortal.api.model.DecryptDataRequest;
+import org.qortal.crypto.AES;
 
 @Path("/arbitrary")
 @Tag(name = "Arbitrary")
@@ -652,6 +658,7 @@ public class ArbitraryResource {
 	@Path("/compute")
 	@Operation(
 			summary = "Compute nonce for raw, unsigned ARBITRARY transaction",
+			
 			requestBody = @RequestBody(
 					required = true,
 					content = @Content(
@@ -787,7 +794,49 @@ public class ArbitraryResource {
 		return this.download(service, name, identifier, filepath, encoding, rebuild, async, attempts);
 	}
 
-
+	@POST
+	@Path("/decrypt")
+	@Consumes(MediaType.APPLICATION_JSON)
+	@Produces(MediaType.TEXT_PLAIN)
+	@Operation(
+		summary = "Decrypt encrypted data using a secret",
+		description = "Decrypts Base58-encoded encrypted data using the provided secret key and returns the decrypted content as Base64.",
+		requestBody = @RequestBody(
+			required = true,
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON,
+				schema = @Schema(implementation = DecryptDataRequest.class)
+			)
+		),
+		responses = {
+			@ApiResponse(
+				description = "Decrypted data in Base64",
+				content = @Content(
+					mediaType = MediaType.TEXT_PLAIN,
+					schema = @Schema(type = "string", example = "VGhpcyBpcyBhIHRlc3QgbWVzc2FnZQ==")
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_CRITERIA, ApiError.REPOSITORY_ISSUE})
+	public Response decryptData(DecryptDataRequest decryptDataRequest) {
+		try {
+			// Ensure authentication if required
+			if (!Settings.getInstance().isQDNAuthBypassEnabled()) {
+				Security.checkApiCallAllowed(request, null);
+			}
+	
+			// Decrypt data
+			String decryptedData = decryptDataWithSecret(decryptDataRequest.data, decryptDataRequest.secret);
+	
+			return Response.ok(decryptedData).build();  // ✅ Return as text/plain
+	
+		} catch (Exception e) {
+			return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+					.entity("Error decrypting data: " + e.getMessage())
+					.build();
+		}
+	}
 	// Metadata
 
 	@GET
@@ -1496,6 +1545,14 @@ public class ArbitraryResource {
 		} catch (Exception e) {
 			LOGGER.debug(String.format("Unable to load %s %s: %s", service, name, e.getMessage()));
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FILE_NOT_FOUND, e.getMessage());
+		}
+	}
+
+	private String decryptDataWithSecret(String data, String secret) {
+		try {
+			return AES.decryptFromData(data, secret);  // ✅ Return decrypted string
+		} catch (Exception e) {
+			throw new RuntimeException("Error decrypting data: " + e.getMessage(), e);
 		}
 	}
 

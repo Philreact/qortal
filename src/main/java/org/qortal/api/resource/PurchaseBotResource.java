@@ -17,8 +17,10 @@ import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.Security;
 import org.qortal.api.model.PurchaseBotCreateRequest;
+import org.qortal.api.model.PurchaseStoreCreateRequest;
 import org.qortal.controller.purchasebot.PurchaseBot;
 import org.qortal.data.purchase.PurchaseBotData;
+import org.qortal.data.purchase.PurchaseStoreData;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
@@ -76,7 +78,7 @@ public class PurchaseBotResource {
     }
 
     @POST
-    @Path("/create")
+    @Path("/product/create")
     @Operation(
         summary = "Create or update a purchase-bot entry",
         requestBody = @RequestBody(
@@ -94,13 +96,19 @@ public class PurchaseBotResource {
             )
         }
     )
-    @ApiErrors({ApiError.INVALID_PUBLIC_KEY, ApiError.REPOSITORY_ISSUE})
+    @ApiErrors({ApiError.INVALID_PUBLIC_KEY, ApiError.REPOSITORY_ISSUE, ApiError.INVALID_CRITERIA})
     @SecurityRequirement(name = "apiKey")
     public String createOrUpdatePurchaseBot(@HeaderParam(Security.API_KEY_HEADER) String apiKey, PurchaseBotCreateRequest purchaseRequest) {
         Security.checkApiCallAllowed(request);
     
         try (final Repository repository = RepositoryManager.getRepository()) {
-            // Check if an entry with the same productId already exists
+            // 1️⃣ Check if the store exists
+            boolean storeExists = repository.getPurchaseRepository().doesStoreExist(purchaseRequest.storeId);
+            if (!storeExists) {
+                throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA, new Exception("Store ID does not exist: " + purchaseRequest.storeId));
+            }
+    
+            // 2️⃣ Check if a product with the same ID exists
             PurchaseBotData existingPurchaseBot = repository.getPurchaseRepository().getPurchaseBotData(purchaseRequest.productId);
     
             byte[] tradePrivateKey;
@@ -118,20 +126,22 @@ public class PurchaseBotResource {
                 tradeNativePublicKey = PurchaseBot.deriveTradeNativePublicKey(tradePrivateKey);
             }
     
-            // Create or update the purchase-bot data
+            // 3️⃣ Create or update the purchase-bot data
             PurchaseBotData purchaseBotData = new PurchaseBotData(
                 tradePrivateKey,
                 tradeNativePublicKey,
                 purchaseRequest.productId,
+                purchaseRequest.storeId, // Store ID added
                 purchaseRequest.sellerAddress,
                 purchaseRequest.price,
                 purchaseRequest.productKey,
+                purchaseRequest.productDescription, // Store description added
                 "WAITING_FOR_PAYMENT", // Default initial state
                 PurchaseBot.State.resolveStateValue("WAITING_FOR_PAYMENT"),
                 lastPaymentBlockHeight // Retain last payment block height if updating
             );
     
-            // Save purchase-bot data (insert if new, update if exists)
+            // 4️⃣ Save purchase-bot data (insert if new, update if exists)
             repository.getPurchaseRepository().save(purchaseBotData);
             repository.saveChanges();
     
@@ -141,5 +151,59 @@ public class PurchaseBotResource {
         }
     }
     
+    @POST
+    @Path("/store/create")
+    @Operation(
+        summary = "Create or update a purchase store",
+        requestBody = @RequestBody(
+            required = true,
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON,
+                schema = @Schema(
+                    implementation = PurchaseStoreCreateRequest.class
+                )
+            )
+        ),
+        responses = {
+            @ApiResponse(
+                content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+            )
+        }
+    )
+    @ApiErrors({ApiError.INVALID_PUBLIC_KEY, ApiError.REPOSITORY_ISSUE, ApiError.INVALID_CRITERIA})
+    @SecurityRequirement(name = "apiKey")
+    public String createOrUpdateStore(@HeaderParam(Security.API_KEY_HEADER) String apiKey, PurchaseStoreCreateRequest storeRequest) {
+        Security.checkApiCallAllowed(request);
+    
+        try (final Repository repository = RepositoryManager.getRepository()) {
+            // 1️⃣ Check if a store with the same ID exists
+            PurchaseStoreData existingStore = repository.getPurchaseRepository().getStoreData(storeRequest.storeId);
+    
+            if (existingStore != null) {
+                // If store exists, update both store name and description
+                existingStore.setStoreName(storeRequest.storeName);  // 🆕 Store Name
+                existingStore.setStoreDescription(storeRequest.storeDescription);  // 🆕 Store Description
+                repository.getPurchaseRepository().saveStore(existingStore);
+                repository.saveChanges();
+                return "Store updated successfully";
+            }
+    
+            // 2️⃣ Create a new store entry
+            PurchaseStoreData newStore = new PurchaseStoreData(
+                storeRequest.storeId,
+                storeRequest.storeName,  // 🆕 Store Name
+                storeRequest.sellerAddress,
+                storeRequest.storeDescription
+            );
+    
+            repository.getPurchaseRepository().saveStore(newStore);
+            repository.saveChanges();
+            return "Store created successfully";
+        } catch (DataException e) {
+            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+        }
+    }
+    
+
     
 }

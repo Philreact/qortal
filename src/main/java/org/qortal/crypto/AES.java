@@ -30,6 +30,7 @@ import javax.crypto.*;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
+
 import java.io.*;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -37,7 +38,10 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
+import java.util.Arrays;
 import java.util.Base64;
+
+import org.qortal.utils.Base58;
 
 public class AES {
 
@@ -197,6 +201,46 @@ public class AES {
         final int chunkSize = 16;
         final int expectedSize = Math.round((inFileSize + ivSize) / chunkSize) * chunkSize + chunkSize;
         return expectedSize;
+    }
+
+
+    public static String decryptFromData(String data, String secret) {
+        try {
+            System.out.println("Starting decryption...");
+
+            // 1️⃣ Decode Base58 secret into AES key
+            byte[] secretKeyBytes = Base58.decode(secret);
+            SecretKey secretKey = new SecretKeySpec(secretKeyBytes, "AES");
+
+            // 2️⃣ Decode Base58 encrypted data
+            byte[] encryptedBytes = Base58.decode(data);
+
+            // 3️⃣ Extract the IV (first 16 bytes) and the encrypted payload
+            byte[] ivBytes = Arrays.copyOfRange(encryptedBytes, 0, 16);
+            byte[] cipherBytes = Arrays.copyOfRange(encryptedBytes, 16, encryptedBytes.length);
+            IvParameterSpec iv = new IvParameterSpec(ivBytes);
+
+            // 4️⃣ Decrypt data
+            byte[] decryptedBytes = decryptData("AES/CBC/PKCS5Padding", cipherBytes, secretKey, iv);
+
+            // 5️⃣ Return decrypted data as Base64
+            String base64DecryptedData = Base64.getEncoder().encodeToString(decryptedBytes);
+
+            return base64DecryptedData;
+
+        } catch (InvalidAlgorithmParameterException | InvalidKeyException | NoSuchAlgorithmException | BadPaddingException | IllegalBlockSizeException | NoSuchPaddingException e) {
+            System.err.println("❌ Error decrypting data: " + e.getMessage());
+            throw new RuntimeException("Decryption failed due to an invalid secret or data.", e);
+        }
+    }
+
+    private static byte[] decryptData(String algorithm, byte[] cipherText, SecretKey key, IvParameterSpec iv)
+            throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidAlgorithmParameterException,
+            InvalidKeyException, BadPaddingException, IllegalBlockSizeException {
+
+        Cipher cipher = Cipher.getInstance(algorithm);
+        cipher.init(Cipher.DECRYPT_MODE, key, iv);
+        return cipher.doFinal(cipherText);
     }
 
 }

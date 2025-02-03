@@ -8,11 +8,10 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -122,8 +121,8 @@ public class PurchaseBot implements Listener {
                 LOGGER.warn("Unknown state for PurchaseBot: {}", currentState);
         }
     }
-    private final Set<String> deliveredTransactionSignatures = Collections.synchronizedSet(new HashSet<>());
-
+    private static final Set<String> deliveredTransactionSignatures = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<String, Integer> transactionBlockHeights = new ConcurrentHashMap<>();
     private void handleWaitingForPayment(Repository repository, PurchaseBotData purchaseBotData) throws DataException, IOException, TransformationException {
         String sellerAddress = purchaseBotData.getSellerAddress();
         long price = purchaseBotData.getPrice();
@@ -137,17 +136,24 @@ public class PurchaseBot implements Listener {
     
         System.out.println("Saved blockheight: " + lastSaveBlockHeight);
         System.out.println("latest blockheight: " + latestBlockHeight);
-    
+        int offset = 10;
+        if(deliveredTransactionSignatures.isEmpty()){
+            offset = 0;
+        }
         List<PaymentTransaction> paymentTransactions = repository.getTransactionRepository().findPaymentTransactions(
-                sellerAddress, price, lastSaveBlockHeight, latestBlockHeight
+            address, price, lastSaveBlockHeight - offset, latestBlockHeight
         );
-    
+        int currentBlockHeight = Controller.getInstance().getChainHeight();
+
         for (PaymentTransaction paymentTransaction : paymentTransactions) {
-    
+            String txSignature = Base58.encode(paymentTransaction.getTransactionData().getSignature());
             LOGGER.info("PaymentTransaction: signature={}",
                     Base58.encode(paymentTransaction.getPaymentTransactionData().getSignature()));
-    
             synchronized (deliveredTransactionSignatures) {
+                if (deliveredTransactionSignatures.contains(txSignature)) {
+                    LOGGER.info("Skipping already processed transaction: {}", txSignature);
+                    continue;
+                }
                 byte[] reference = new byte[64];
                 new Random().nextBytes(reference);
                 System.out.println("reference (Base64): " + Base64.getEncoder().encodeToString(reference));
@@ -166,6 +172,18 @@ public class PurchaseBot implements Listener {
                 byte[] nonce2 = Arrays.copyOfRange(reference, 0, 12);
                 // 4) Encrypt using AES-GCM
                 byte[] encryptedMessage = Crypto.encryptAESGCM(chatEncryptionSeed, nonce2, data);
+                byte[] testText = "hello".getBytes();
+                byte[] combined = new byte[nonce2.length + encryptedMessage.length];
+                System.arraycopy(nonce2, 0, combined, 0, nonce2.length);
+                System.arraycopy(encryptedMessage, 0, combined, nonce2.length, encryptedMessage.length);
+                System.out.println("Original data length: " + data.length);
+                System.out.println("BASE64 encryptedMessage: " + Base64.getEncoder().encodeToString(encryptedMessage));
+                System.out.println("BASE64 nonce2: " + Base64.getEncoder().encodeToString(nonce2));
+
+System.out.println("Encrypted data length: " + encryptedMessage.length);
+System.out.println("Nonce length: " + nonce2.length);
+System.out.println("Final combined length: " + combined.length);
+
                 LOGGER.info("sender: {}", sender);
                 long timestamp = NTP.getTime();
                 Transaction.TransactionType txType = Transaction.TransactionType.ARBITRARY;
@@ -190,7 +208,7 @@ public class PurchaseBot implements Listener {
                 File tempFile = Paths.get(tempDirectory.toString(), filename).toFile();
                 tempFile.deleteOnExit();
                 try {
-                    Files.write(tempFile.toPath(), encryptedMessage);
+                    Files.write(tempFile.toPath(), combined);
                 } catch (IOException e) {
                     LOGGER.error("Error writing encrypted message to file", e);
                     continue;
@@ -244,6 +262,12 @@ public class PurchaseBot implements Listener {
                     Transaction.ValidationResult result = transaction.importAsUnconfirmed();
                     if (result != Transaction.ValidationResult.OK)
                         return;
+
+                   
+                    deliveredTransactionSignatures.add(txSignature);
+                    transactionBlockHeights.put(txSignature, currentBlockHeight);
+                    
+
                 } finally {
                     blockchainLock.unlock(); // Always unlock in the finally block
                 }
@@ -258,7 +282,10 @@ public class PurchaseBot implements Listener {
         }
     
         repository.getPurchaseRepository().updateSavedBlockHeight(purchaseBotData.getProductId(), latestBlockHeight);
-        LOGGER.debug("No valid payment transactions found for seller: {}", sellerAddress);
+        int minValidBlockHeight = currentBlockHeight - 10;
+        transactionBlockHeights.entrySet().removeIf(entry -> entry.getValue() < minValidBlockHeight);
+        deliveredTransactionSignatures.removeIf(sig -> transactionBlockHeights.getOrDefault(sig, 0) < minValidBlockHeight);
+        LOGGER.debug("No valid payment transactions found for seller: {}", address);
     }
     
 

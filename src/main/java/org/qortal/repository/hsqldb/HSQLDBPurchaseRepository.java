@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.List;
 
 import org.qortal.data.purchase.PurchaseBotData;
+import org.qortal.data.purchase.PurchaseStoreData;
 import org.qortal.repository.DataException;
 import org.qortal.repository.PurchaseRepository;
 
@@ -20,30 +21,33 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
 
     @Override
     public PurchaseBotData getPurchaseBotData(String purchaseId) throws DataException {
-        String sql = "SELECT private_key, public_key, product_id, seller_address, "
-                   + "price, product_key, state, state_value, last_payment_block_height "
-                   + "FROM PurchaseBotStates WHERE product_id = ?";
+        String sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
+                   + "price, product_key, description, state, state_value, last_payment_block_height "
+                   + "FROM PurchaseBotProducts WHERE product_id = ?";
     
         try (ResultSet resultSet = this.repository.checkedExecute(sql, purchaseId)) {
-            if (resultSet == null)
+            if (resultSet == null || !resultSet.next()) // Ensure result is fetched properly
                 return null;
     
             byte[] privateKey = resultSet.getBytes(1);
             byte[] publicKey = resultSet.getBytes(2);
             String productId = resultSet.getString(3);
-            String sellerAddress = resultSet.getString(4);
-            long price = resultSet.getLong(5);
-            String productKey = resultSet.getString(6);
-            String state = resultSet.getString(7);
-            int stateValue = resultSet.getInt(8);
-            int lastPaymentBlockHeight = resultSet.getInt(9);
+            String storeId = resultSet.getString(4);
+            String sellerAddress = resultSet.getString(5);
+            long price = resultSet.getLong(6);
+            String productKey = resultSet.getString(7);
+            String description = resultSet.getString(8);
+            String state = resultSet.getString(9);
+            int stateValue = resultSet.getInt(10);
+            int lastPaymentBlockHeight = resultSet.getInt(11);
     
-            return new PurchaseBotData(privateKey, publicKey, productId, sellerAddress,
-                                       price, productKey, state, stateValue, lastPaymentBlockHeight);
+            return new PurchaseBotData(privateKey, publicKey, productId, storeId, sellerAddress,
+                                       price, productKey, description, state, stateValue, lastPaymentBlockHeight);
         } catch (SQLException e) {
             throw new DataException("Unable to fetch purchase-bot data from repository", e);
         }
     }
+    
 
     @Override
     public boolean existsPurchaseForProductExcludingStates(String productId, List<String> excludeStates) throws DataException {
@@ -66,7 +70,7 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
         }
 
         try {
-            return this.repository.exists("PurchaseBotStates", whereClause.toString(), bindParams);
+            return this.repository.exists("PurchaseBotProducts", whereClause.toString(), bindParams);
         } catch (SQLException e) {
             throw new DataException("Unable to check for purchase-bot state in repository", e);
         }
@@ -74,8 +78,8 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
 
     @Override
     public List<PurchaseBotData> getAllPurchaseBotData() throws DataException {
-        String sql = "SELECT private_key, public_key, product_id, seller_address, "
-                   + "price, product_key, state, state_value, last_payment_block_height FROM PurchaseBotStates";
+        String sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
+                   + "price, product_key, description, state, state_value, last_payment_block_height FROM PurchaseBotProducts";
     
         List<PurchaseBotData> allPurchaseBotData = new ArrayList<>();
     
@@ -83,43 +87,48 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
             if (resultSet == null)
                 return allPurchaseBotData;
     
-            do {
+            while (resultSet.next()) { // Corrected loop structure
                 byte[] privateKey = resultSet.getBytes(1);
                 byte[] publicKey = resultSet.getBytes(2);
                 String productId = resultSet.getString(3);
-                String sellerAddress = resultSet.getString(4);
-                long price = resultSet.getLong(5);
-                String productKey = resultSet.getString(6);
-                String state = resultSet.getString(7);
-                int stateValue = resultSet.getInt(8);
-                int lastPaymentBlockHeight = resultSet.getInt(9);
+                String storeId = resultSet.getString(4);
+                String sellerAddress = resultSet.getString(5);
+                long price = resultSet.getLong(6);
+                String productKey = resultSet.getString(7);
+                String description = resultSet.getString(8);
+                String state = resultSet.getString(9);
+                int stateValue = resultSet.getInt(10);
+                int lastPaymentBlockHeight = resultSet.getInt(11);
     
                 PurchaseBotData purchaseBotData = new PurchaseBotData(
-                    privateKey, publicKey, productId, sellerAddress, price,
-                    productKey, state, stateValue, lastPaymentBlockHeight
+                    privateKey, publicKey, productId, storeId, sellerAddress, price,
+                    productKey, description, state, stateValue, lastPaymentBlockHeight
                 );
                 allPurchaseBotData.add(purchaseBotData);
-            } while (resultSet.next());
+            }
     
             return allPurchaseBotData;
         } catch (SQLException e) {
             throw new DataException("Unable to fetch all purchase-bot data from repository", e);
         }
     }
+    
 
     @Override
     public void save(PurchaseBotData purchaseBotData) throws DataException {
-        HSQLDBSaver saveHelper = new HSQLDBSaver("PurchaseBotStates");
-
+        HSQLDBSaver saveHelper = new HSQLDBSaver("PurchaseBotProducts");
+    
         saveHelper.bind("private_key", purchaseBotData.getPrivateKey())
                   .bind("public_key", purchaseBotData.getPublicKey())
                   .bind("product_id", purchaseBotData.getProductId())
+                  .bind("store_id", purchaseBotData.getStoreId())  // 🆕 Added store ID
                   .bind("seller_address", purchaseBotData.getSellerAddress())
                   .bind("price", purchaseBotData.getPrice())
                   .bind("product_key", purchaseBotData.getProductKey())
+                  .bind("description", purchaseBotData.getProductDescription())  // 🆕 Added product description
                   .bind("state", purchaseBotData.getPurchaseState())
                   .bind("state_value", purchaseBotData.getPurchaseStateValue());
-
+    
         try {
             saveHelper.execute(this.repository);
         } catch (SQLException e) {
@@ -128,9 +137,26 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     }
 
     @Override
+public void saveStore(PurchaseStoreData purchaseStoreData) throws DataException {
+    HSQLDBSaver saveHelper = new HSQLDBSaver("PurchaseBotStores"); // Table for storing stores
+
+    saveHelper.bind("store_id", purchaseStoreData.getStoreId())
+              .bind("store_name", purchaseStoreData.getStoreName()) // 🆕 Store name
+              .bind("seller_address", purchaseStoreData.getSellerAddress())
+              .bind("description", purchaseStoreData.getStoreDescription()); // Store description
+
+    try {
+        saveHelper.execute(this.repository);
+    } catch (SQLException e) {
+        throw new DataException("Unable to save purchase store data into repository", e);
+    }
+}
+
+    
+
+    @Override
     public void updateSavedBlockHeight(String productId, int blockHeight) throws DataException {
-        String sql = "UPDATE PurchaseBotStates SET last_payment_block_height = ? WHERE product_id = ?";
-        Object[] bindParams = { blockHeight, productId };
+        String sql = "UPDATE PurchaseBotProducts SET last_payment_block_height = ? WHERE product_id = ?";
     
         try {
             System.out.println("update height: " + blockHeight );
@@ -145,7 +171,7 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     
     @Override
     public int getSavedBlockHeight(String productId) throws DataException {
-        String sql = "SELECT last_payment_block_height FROM PurchaseBotStates WHERE product_id = ?";
+        String sql = "SELECT last_payment_block_height FROM PurchaseBotProducts WHERE product_id = ?";
     
         try (ResultSet resultSet = this.repository.checkedExecute(sql, productId)) {
             System.out.println("Executing SQL Query: " + sql);
@@ -171,9 +197,80 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     @Override
     public int delete(String productId) throws DataException {
         try {
-            return this.repository.delete("PurchaseBotStates", "product_id = ?", productId);
+            return this.repository.delete("PurchaseBotProducts", "product_id = ?", productId);
         } catch (SQLException e) {
             throw new DataException("Unable to delete purchase-bot data from repository", e);
         }
     }
+
+    @Override
+    public boolean doesStoreExist(String storeId) throws DataException {
+        String sql = "SELECT COUNT(*) AS count FROM PurchaseBotStores WHERE store_id = ?";
+    
+        try (ResultSet resultSet = this.repository.checkedExecute(sql, storeId)) {
+            System.out.println("Executing SQL Query: " + sql);
+            System.out.println("Store ID: " + storeId);
+    
+            if (resultSet == null) {
+                System.out.println("ResultSet is NULL!");
+                return false;
+            }
+    
+            int count = resultSet.getInt("count");
+            System.out.println("Store Count Retrieved: " + count);
+            return count > 0; // If count > 0, store exists; otherwise, it does not
+    
+        } catch (SQLException e) {
+            System.err.println("❌ SQL Exception while checking store existence: " + e.getMessage());
+            return false;
+        }
+    }
+
+    @Override
+public PurchaseStoreData getStoreData(String storeId) throws DataException {
+    String sql = "SELECT store_id, store_name, seller_address, store_description "
+               + "FROM PurchaseBotStores WHERE store_id = ?";
+
+    try (ResultSet resultSet = this.repository.checkedExecute(sql, storeId)) {
+        if (resultSet == null || !resultSet.next()) // Ensure result is fetched properly
+            return null;
+
+        String fetchedStoreId = resultSet.getString(1);
+        String storeName = resultSet.getString(2);
+        String sellerAddress = resultSet.getString(3);
+        String storeDescription = resultSet.getString(4);
+
+        return new PurchaseStoreData(fetchedStoreId, storeName, sellerAddress, storeDescription);
+    } catch (SQLException e) {
+        throw new DataException("Unable to fetch store data from repository", e);
+    }
+}
+
+@Override
+public List<PurchaseStoreData> getAllStores() throws DataException {
+    String sql = "SELECT store_id, store_name, seller_address, store_description FROM PurchaseBotStores";
+
+    List<PurchaseStoreData> allStores = new ArrayList<>();
+
+    try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
+        if (resultSet == null)
+            return allStores;
+
+        while (resultSet.next()) { // Correct loop structure
+            String storeId = resultSet.getString(1);
+            String storeName = resultSet.getString(2);
+            String sellerAddress = resultSet.getString(3);
+            String storeDescription = resultSet.getString(4);
+
+            PurchaseStoreData storeData = new PurchaseStoreData(storeId, storeName, sellerAddress, storeDescription);
+            allStores.add(storeData);
+        }
+
+        return allStores;
+    } catch (SQLException e) {
+        throw new DataException("Unable to fetch all store data from repository", e);
+    }
+}
+
+    
 }
