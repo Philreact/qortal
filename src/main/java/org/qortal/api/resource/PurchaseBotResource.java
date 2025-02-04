@@ -131,17 +131,19 @@ public class PurchaseBotResource {
     @SecurityRequirement(name = "apiKey")
     public String createOrUpdatePurchaseBot(@HeaderParam(Security.API_KEY_HEADER) String apiKey, PurchaseBotCreateRequest purchaseRequest) {
         Security.checkApiCallAllowed(request);
-    
+        System.out.println("TEST BEFORE: ");
         try (final Repository repository = RepositoryManager.getRepository()) {
-            // 1️⃣ Check if the store exists
-            boolean storeExists = repository.getPurchaseRepository().doesStoreExist(purchaseRequest.storeId);
-            if (!storeExists) {
+            // 1️⃣ Check if the store exists and retrieve the seller address
+            PurchaseStoreData storeData = repository.getPurchaseRepository().getStoreData(purchaseRequest.storeId);
+            if (storeData == null) {
+                System.out.println("NO STORE: " + purchaseRequest.storeId);
                 throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA, new Exception("Store ID does not exist: " + purchaseRequest.storeId));
             }
+            String sellerAddress = storeData.getSellerAddress(); // Get the seller address from the store
     
             // 2️⃣ Check if a product with the same ID exists
             PurchaseBotData existingPurchaseBot = repository.getPurchaseRepository().getPurchaseBotData(purchaseRequest.productId);
-    
+            System.out.println("TEST 1: ");
             byte[] tradePrivateKey;
             byte[] tradeNativePublicKey;
             String tradeNativeAddress;
@@ -166,7 +168,7 @@ public class PurchaseBotResource {
                 tradeNativePublicKey,
                 tradeNativeAddress,
                 purchaseRequest.storeId, // Store ID added
-                purchaseRequest.sellerAddress,
+                sellerAddress, // Now fetched from the store
                 purchaseRequest.price,
                 purchaseRequest.productKey,
                 purchaseRequest.productDescription, // Store description added
@@ -181,9 +183,11 @@ public class PurchaseBotResource {
     
             return existingPurchaseBot != null ? "PurchaseBot updated successfully" : "PurchaseBot created successfully";
         } catch (DataException e) {
+            System.out.println("ERROR: " + e.toString());
             throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
         }
     }
+    
     
     @POST
     @Path("/store/create")

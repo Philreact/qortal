@@ -37,19 +37,22 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     
     @Override
     public PurchaseBotData getPurchaseBotData(String purchaseId) throws DataException {
-        String sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
-                   + "price, product_key, product_description, state, state_value, last_payment_block_height "
-                   + "FROM PurchaseBotProducts WHERE product_id = ?";
+        String sql = "SELECT pb.private_key, pb.public_key, pb.product_id, pb.store_id, "
+                   + "ps.seller_address, pb.price, pb.product_key, pb.product_description, "
+                   + "pb.state, pb.state_value, pb.last_payment_block_height "
+                   + "FROM PurchaseBotProducts pb "
+                   + "JOIN PurchaseBotStores ps ON pb.store_id = ps.store_id "
+                   + "WHERE pb.product_id = ?";
     
         try (ResultSet resultSet = this.repository.checkedExecute(sql, purchaseId)) {
-            if (resultSet == null || !resultSet.next()) // Ensure result is fetched properly
+            if (resultSet == null) // Ensure result is fetched properly
                 return null;
     
             byte[] privateKey = resultSet.getBytes(1);
             byte[] publicKey = resultSet.getBytes(2);
             String productId = resultSet.getString(3);
             String storeId = resultSet.getString(4);
-            String sellerAddress = resultSet.getString(5);
+            String sellerAddress = resultSet.getString(5); // Fetched from the PurchaseBotStores table
             long price = resultSet.getLong(6);
             String productKey = resultSet.getString(7);
             String description = resultSet.getString(8);
@@ -63,6 +66,7 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
             throw new DataException("Unable to fetch purchase-bot data from repository", e);
         }
     }
+    
     
 
     @Override
@@ -99,14 +103,20 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     
         // 🟢 If storeId is provided, filter by store
         if (storeId != null) {
-            sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
-                + "price, product_key, product_description, state, state_value, last_payment_block_height "
-                + "FROM PurchaseBotProducts WHERE store_id = ?";
+            sql = "SELECT pb.private_key, pb.public_key, pb.product_id, pb.store_id, "
+                + "ps.seller_address, pb.price, pb.product_key, pb.product_description, "
+                + "pb.state, pb.state_value, pb.last_payment_block_height "
+                + "FROM PurchaseBotProducts pb "
+                + "JOIN PurchaseBotStores ps ON pb.store_id = ps.store_id "
+                + "WHERE pb.store_id = ?";
             params.add(storeId);
         } else {
             // 🔵 If storeId is null, fetch all products
-            sql = "SELECT private_key, public_key, product_id, store_id, seller_address, "
-                + "price, product_key, product_description, state, state_value, last_payment_block_height FROM PurchaseBotProducts";
+            sql = "SELECT pb.private_key, pb.public_key, pb.product_id, pb.store_id, "
+                + "ps.seller_address, pb.price, pb.product_key, pb.product_description, "
+                + "pb.state, pb.state_value, pb.last_payment_block_height "
+                + "FROM PurchaseBotProducts pb "
+                + "JOIN PurchaseBotStores ps ON pb.store_id = ps.store_id";
         }
     
         List<PurchaseBotData> purchaseBotDataList = new ArrayList<>();
@@ -115,12 +125,12 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
             if (resultSet == null)
                 return purchaseBotDataList;
     
-          do {
+            do {
                 byte[] privateKey = resultSet.getBytes(1);
                 byte[] publicKey = resultSet.getBytes(2);
                 String productId = resultSet.getString(3);
                 String fetchedStoreId = resultSet.getString(4);
-                String sellerAddress = resultSet.getString(5);
+                String sellerAddress = resultSet.getString(5); // Fetched from PurchaseBotStores
                 long price = resultSet.getLong(6);
                 String productKey = resultSet.getString(7);
                 String description = resultSet.getString(8);
@@ -137,10 +147,11 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
     
             return purchaseBotDataList;
         } catch (SQLException e) {
-            System.out.println("unable to fetch: " + e);
+            System.out.println("Unable to fetch: " + e);
             throw new DataException("Unable to fetch purchase-bot data from repository", e);
         }
     }
+    
     
     
 
@@ -152,7 +163,6 @@ public class HSQLDBPurchaseRepository implements PurchaseRepository {
                   .bind("public_key", purchaseBotData.getPublicKey())
                   .bind("product_id", purchaseBotData.getProductId())
                   .bind("store_id", purchaseBotData.getStoreId())  // 🆕 Added store ID
-                  .bind("seller_address", purchaseBotData.getSellerAddress())
                   .bind("price", purchaseBotData.getPrice())
                   .bind("product_key", purchaseBotData.getProductKey())
                   .bind("product_description", purchaseBotData.getProductDescription())  // 🆕 Added product description
@@ -262,7 +272,7 @@ public PurchaseStoreData getStoreData(String storeId) throws DataException {
                + "FROM PurchaseBotStores WHERE store_id = ?";
 
     try (ResultSet resultSet = this.repository.checkedExecute(sql, storeId)) {
-        if (resultSet == null || !resultSet.next()) // Ensure result is fetched properly
+        if (resultSet == null) // Ensure result is fetched properly
             return null;
 
         String fetchedStoreId = resultSet.getString(1);

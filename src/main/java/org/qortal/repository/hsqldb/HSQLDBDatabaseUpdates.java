@@ -1072,7 +1072,6 @@ public class HSQLDBDatabaseUpdates {
 						+ "public_key QortalPublicKey NOT NULL, "
 						+ "private_key QortalKeySeed NOT NULL, "
 						+ "store_id VARCHAR(64) NOT NULL, "
-						+ "seller_address QortalAddress NOT NULL, "
 						+ "price QortalAmount NOT NULL, "
 						+ "product_key TEXT NOT NULL, "
 						+ "product_description TEXT, "
@@ -1089,7 +1088,6 @@ public class HSQLDBDatabaseUpdates {
 					// 3️⃣ Create indexes to optimize queries
 					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStoreIndex ON PurchaseBotProducts (store_id)");
 					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseProductIndex ON PurchaseBotProducts (product_id)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseSellerIndex ON PurchaseBotProducts (seller_address)");
 					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStateIndex ON PurchaseBotProducts (state)");
 					stmt.execute("CREATE INDEX IF NOT EXISTS PurchaseStateValueIndex ON PurchaseBotProducts (state_value)");
 				

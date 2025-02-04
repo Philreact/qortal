@@ -15,9 +15,6 @@ public class PurchaseBotCreateRequest {
     @Schema(description = "Store ID where the product belongs", example = "STORE123")
     public String storeId;
 
-    @Schema(description = "Seller's Qortal address", example = "QWERTYUIOP1234567890ASDFGHJKLZXCVBNM")
-    public String sellerAddress;
-
     @Schema(description = "Price of the product in QORT", example = "100.00000000", type = "number")
     @XmlJavaTypeAdapter(value = org.qortal.api.AmountTypeAdapter.class)
     public long price;
