@@ -50,6 +50,20 @@ public interface TransactionRepository {
 	public Map<TransactionType, Integer> getTransactionSummary(int startHeight, int endHeight) throws DataException;
 
 	/**
+	 * Returns analytics data including:
+	 * - Active users (≥1 type 10 transaction)
+	 * - Highly active users (≥5 type 10 transactions)
+	 * - Name registrations (users with type 3 transactions)
+	 * 
+	 * @param startHeight height of the first block to check
+	 * @param endHeight height of the last block to check
+	 * @return a map containing analytics metrics: "activeUsers", "highlyActiveUsers", "nameRegistrations"
+	 * @throws DataException if an error occurs accessing the database
+	 */
+	public Map<String, Long> getAnalyticsSummary(int startHeight, int endHeight) throws DataException;
+
+
+	/**
 	 * Returns signatures for transactions that match search criteria.
 	 * <p>
 	 * If <tt>blockLimit</tt> is specified, and <tt>startBlock</tt> is <tt>null</tt>,

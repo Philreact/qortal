@@ -1,6 +1,7 @@
 package org.qortal.api.restricted.resource;
 
 import com.google.common.collect.Lists;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.enums.ParameterIn;
@@ -11,6 +12,7 @@ import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -49,17 +51,23 @@ import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.Map;
+import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
+
+import org.qortal.api.model.AnalyticsSummary;
 
 @Path("/admin")
 @Tag(name = "Admin")
@@ -363,6 +371,62 @@ public class AdminResource {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
 	}
+
+	@GET
+	@Path("/analytics")
+	@Operation(
+		summary = "Analytics for a given timestamp range",
+		responses = {
+			@ApiResponse(
+				content = @Content(schema = @Schema(implementation = AnalyticsSummary.class))
+			)
+		}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public AnalyticsSummary analytics(
+		@QueryParam("startTimestamp") long startTimestamp,
+		@QueryParam("endTimestamp") long endTimestamp
+	) {
+
+		// Define the maximum allowed range (2 months = ~60 days)
+		final long MAX_RANGE = 60L * 24 * 60 * 60 * 1000; // 60 days in milliseconds
+
+		// Validate range
+		if (endTimestamp - startTimestamp > MAX_RANGE) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_CRITERIA, new IllegalArgumentException("Timestamp range exceeds the 2-month limit."));
+
+		}
+
+		AnalyticsSummary summary = new AnalyticsSummary();
+	
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			// Convert timestamps to blockchain heights
+			int startHeight = repository.getBlockRepository().getHeightFromTimestamp(startTimestamp);
+			if (startHeight <= 1) {
+				startHeight = repository.getBlockArchiveRepository().getHeightFromTimestamp(startTimestamp);
+			}
+
+			int endHeight = repository.getBlockRepository().getHeightFromTimestamp(endTimestamp);
+			if (endHeight <= 1) {
+				endHeight = repository.getBlockArchiveRepository().getHeightFromTimestamp(endTimestamp);
+			}
+			
+	
+			// Fetch analytics data
+			Map<String, Long> analyticsData = repository.getTransactionRepository().getAnalyticsSummary(startHeight + 1, endHeight);
+			
+			summary.setActiveUsers(analyticsData.getOrDefault("activeUsers", 0L).intValue());
+			summary.setHighlyActiveUsers(analyticsData.getOrDefault("highlyActiveUsers", 0L).intValue());
+			summary.setNameRegistrations(analyticsData.getOrDefault("nameRegistrations", 0L).intValue());
+
+	
+			return summary;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+	
+	
 
 	@GET
 	@Path("/enginestats")

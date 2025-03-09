@@ -381,6 +381,49 @@ public class HSQLDBTransactionRepository implements TransactionRepository {
 		}
 	}
 
+    @Override
+	public Map<String, Long> getAnalyticsSummary(int startHeight, int endHeight) throws DataException {
+		String sql = "SELECT creator, type FROM Transactions "
+				   + "WHERE block_height BETWEEN ? AND ? "
+				   + "AND type IN (10, 3)"; // Fetch both type 10 and type 3
+	
+		Map<String, Integer> type10Counts = new HashMap<>(); // Track type 10 transactions per creator
+		Set<String> type3Registrations = new HashSet<>(); // Track creators who made a type 3 transaction
+	
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, startHeight, endHeight)) {
+			if (resultSet == null || !resultSet.next()) {
+				return Map.of("activeUsers", 0L, "highlyActiveUsers", 0L, "nameRegistrations", 0L);
+			}
+	
+			do {
+				String creator = resultSet.getString("creator");
+				int txType = resultSet.getInt("type");
+	
+				if (txType == 10) {
+					type10Counts.put(creator, type10Counts.getOrDefault(creator, 0) + 1);
+				} else if (txType == 3) {
+					type3Registrations.add(creator);
+				}
+	
+			} while (resultSet.next());
+	
+			// Calculate results
+			long activeUsers = type10Counts.size(); // Users with at least 1 type 10 tx
+			long highlyActiveUsers = type10Counts.values().stream().filter(count -> count >= 5).count(); // Users with 5+ type 10 txs
+			long nameRegistrations = type3Registrations.size(); // Users who performed type 3 txs
+	
+			return Map.of(
+				"activeUsers", activeUsers,
+				"highlyActiveUsers", highlyActiveUsers,
+				"nameRegistrations", nameRegistrations
+			);
+	
+		} catch (SQLException e) {
+			throw new DataException("Error obtaining analytics summary from repository", e);
+		}
+	}
+	
+	
 	@Override
 	public List<byte[]> getSignaturesMatchingCriteria(Integer startBlock, Integer blockLimit, Integer txGroupId,
 													  List<TransactionType> txTypes, Service service, String name, String address,
