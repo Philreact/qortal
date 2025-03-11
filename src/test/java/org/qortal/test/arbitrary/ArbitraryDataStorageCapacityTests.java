@@ -145,56 +145,6 @@ public class ArbitraryDataStorageCapacityTests extends Common {
         }
     }
 
-    @Test
-    public void testDeleteRandomFilesForName() throws DataException, IOException, InterruptedException, IllegalAccessException {
-        try (final Repository repository = RepositoryManager.getRepository()) {
-            String identifier = null; // Not used for this test
-            Service service = Service.ARBITRARY_DATA;
-            int chunkSize = 100;
-            int dataLength = 900; // Actual data length will be longer due to encryption
-
-            // Set originalCopyIndicatorFileEnabled to false, otherwise nothing will be deleted as it all originates from this node
-            FieldUtils.writeField(Settings.getInstance(), "originalCopyIndicatorFileEnabled", false, true);
-
-            // Alice hosts some data (with 10 chunks)
-            PrivateKeyAccount alice = Common.getTestAccount(repository, "alice");
-            String aliceName = "alice";
-            RegisterNameTransactionData transactionData = new RegisterNameTransactionData(TestTransaction.generateBase(alice), aliceName, "");
-            transactionData.setFee(new RegisterNameTransaction(null, null).getUnitFee(transactionData.getTimestamp()));
-            TransactionUtils.signAndMint(repository, transactionData, alice);
-            Path alicePath = ArbitraryUtils.generateRandomDataPath(dataLength);
-            ArbitraryDataFile aliceArbitraryDataFile = ArbitraryUtils.createAndMintTxn(repository, Base58.encode(alice.getPublicKey()), alicePath, aliceName, identifier, ArbitraryTransactionData.Method.PUT, service, alice, chunkSize);
-
-            // Bob hosts some data too (also with 10 chunks)
-            PrivateKeyAccount bob = Common.getTestAccount(repository, "bob");
-            String bobName = "bob";
-            transactionData = new RegisterNameTransactionData(TestTransaction.generateBase(bob), bobName, "");
-            transactionData.setFee(new RegisterNameTransaction(null, null).getUnitFee(transactionData.getTimestamp()));
-            TransactionUtils.signAndMint(repository, transactionData, bob);
-            Path bobPath = ArbitraryUtils.generateRandomDataPath(dataLength);
-            ArbitraryDataFile bobArbitraryDataFile = ArbitraryUtils.createAndMintTxn(repository, Base58.encode(bob.getPublicKey()), bobPath, bobName, identifier, ArbitraryTransactionData.Method.PUT, service, bob, chunkSize);
-
-            // All 20 chunks should exist
-            assertEquals(10, aliceArbitraryDataFile.chunkCount());
-            assertTrue(aliceArbitraryDataFile.allChunksExist());
-            assertEquals(10, bobArbitraryDataFile.chunkCount());
-            assertTrue(bobArbitraryDataFile.allChunksExist());
-
-            // Now pretend that Bob has reached his storage limit - this should delete random files
-            // Run it 10 times to remove the likelihood of the randomizer always picking Alice's files
-            for (int i=0; i<10; i++) {
-                ArbitraryDataCleanupManager.getInstance().storageLimitReachedForName(repository, bobName);
-            }
-
-            // Alice should still have all chunks
-            assertTrue(aliceArbitraryDataFile.allChunksExist());
-
-            // Bob should be missing some chunks
-            assertFalse(bobArbitraryDataFile.allChunksExist());
-
-        }
-    }
-
     private void deleteListsDirectory() {
         // Delete lists directory if exists
         Path listsPath = Paths.get(Settings.getInstance().getListsPath());

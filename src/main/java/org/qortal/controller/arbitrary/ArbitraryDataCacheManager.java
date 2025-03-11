@@ -15,13 +15,16 @@ import org.qortal.settings.Settings;
 import org.qortal.transaction.ArbitraryTransaction;
 import org.qortal.utils.Base58;
 
+import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class ArbitraryDataCacheManager extends Thread {
@@ -34,6 +37,11 @@ public class ArbitraryDataCacheManager extends Thread {
     /** Queue of arbitrary transactions that require cache updates */
     private final List<ArbitraryTransactionData> updateQueue = Collections.synchronizedList(new ArrayList<>());
 
+    private static final NumberFormat FORMATTER = NumberFormat.getNumberInstance();
+
+    static {
+        FORMATTER.setGroupingUsed(true);
+    }
 
     public static synchronized ArbitraryDataCacheManager getInstance() {
         if (instance == null) {
@@ -191,7 +199,12 @@ public class ArbitraryDataCacheManager extends Thread {
 
             // Loop through all ARBITRARY transactions, and determine latest state
             while (!Controller.isStopping()) {
-                LOGGER.info("Fetching arbitrary transactions {} - {}", offset, offset+batchSize-1);
+                LOGGER.info(
+                    "Fetching arbitrary transactions {} - {} / {} Total",
+                    FORMATTER.format(offset),
+                    FORMATTER.format(offset+batchSize-1),
+                    FORMATTER.format(allArbitraryTransactionsInDescendingOrder.size())
+                );
 
                 List<ArbitraryTransactionData> transactionsToProcess
                     = allArbitraryTransactionsInDescendingOrder.stream()
@@ -254,11 +267,25 @@ public class ArbitraryDataCacheManager extends Thread {
             final int batchSize = Settings.getInstance().getBuildArbitraryResourcesBatchSize();
             int offset = 0;
 
+            List<ArbitraryTransactionData> allHostedTransactions
+                = ArbitraryDataStorageManager.getInstance()
+                    .listAllHostedTransactions(repository, null, null);
+
             // Loop through all ARBITRARY transactions, and determine latest state
             while (!Controller.isStopping()) {
-                LOGGER.info("Fetching hosted transactions {} - {}", offset, offset+batchSize-1);
+                LOGGER.info(
+                    "Fetching hosted transactions {} - {} / {} Total",
+                    FORMATTER.format(offset),
+                    FORMATTER.format(offset+batchSize-1),
+                    FORMATTER.format(allHostedTransactions.size())
+                );
 
-                List<ArbitraryTransactionData> hostedTransactions = ArbitraryDataStorageManager.getInstance().listAllHostedTransactions(repository, batchSize, offset);
+                List<ArbitraryTransactionData> hostedTransactions
+                    = allHostedTransactions.stream()
+                        .skip(offset)
+                        .limit(batchSize)
+                        .collect(Collectors.toList());
+
                 if (hostedTransactions.isEmpty()) {
                     // Complete
                     break;

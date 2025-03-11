@@ -307,17 +307,6 @@ public class ArbitraryDataCleanupManager extends Thread {
 						this.storageLimitReached(repository);
 					}
 
-					// Delete random data associated with name if we're over our storage limit for this name
-					// Use the DELETION_THRESHOLD, for the same reasons as above
-					for (String followedName : ListUtils.followedNames()) {
-						if (isStopping) {
-							return;
-						}
-						if (!storageManager.isStorageSpaceAvailableForName(repository, followedName, DELETION_THRESHOLD)) {
-							this.storageLimitReachedForName(repository, followedName);
-						}
-					}
-
 				} catch (DataException e) {
 					LOGGER.error("Repository issue when cleaning up arbitrary transaction data", e);
 				}
@@ -394,25 +383,6 @@ public class ArbitraryDataCleanupManager extends Thread {
 		}
 
 		// FUTURE: consider reducing the expiry time of the reader cache
-	}
-
-	public void storageLimitReachedForName(Repository repository, String name) throws InterruptedException {
-		// We think that the storage limit has been reached for supplied name - but we should double check
-		if (ArbitraryDataStorageManager.getInstance().isStorageSpaceAvailableForName(repository, name, DELETION_THRESHOLD)) {
-			// We have space available for this name, so don't delete anything
-			return;
-		}
-
-		// Delete a batch of random chunks associated with this name
-		// This reduces the chance of too many nodes deleting the same chunk
-		// when they reach their storage limit
-		Path dataPath = Paths.get(Settings.getInstance().getDataPath());
-		for (int i=0; i<CHUNK_DELETION_BATCH_SIZE; i++) {
-			if (isStopping) {
-				return;
-			}
-			this.deleteRandomFile(repository, dataPath.toFile(), name);
-		}
 	}
 
 	/**
