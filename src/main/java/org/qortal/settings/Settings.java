@@ -510,6 +510,10 @@ public class Settings {
 
 	private int buildArbitraryResourcesBatchSize = 200;
 
+    private int arbitraryIndexingPriority = 5;
+
+	private int arbitraryIndexingFrequency = 1;
+
 	// Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
@@ -1338,5 +1342,13 @@ public class Settings {
 
 	public int getBuildArbitraryResourcesBatchSize() {
 		return buildArbitraryResourcesBatchSize;
+	}
+
+	public int getArbitraryIndexingPriority() {
+		return arbitraryIndexingPriority;
+	}
+
+	public int getArbitraryIndexingFrequency() {
+		return arbitraryIndexingFrequency;
 	}
 }

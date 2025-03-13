@@ -423,6 +423,12 @@ public class Controller extends Thread {
 				LOGGER.info("Db Cache Disabled");
 			}
 
+			LOGGER.info("Arbitrary Indexing Starting ...");
+			ArbitraryIndexUtils.startCaching(
+				Settings.getInstance().getArbitraryIndexingPriority(),
+				Settings.getInstance().getArbitraryIndexingFrequency()
+			);
+
 			if( Settings.getInstance().isBalanceRecorderEnabled() ) {
 				Optional<HSQLDBBalanceRecorder> recorder = HSQLDBBalanceRecorder.getInstance();
 
