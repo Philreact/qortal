@@ -301,6 +301,19 @@ public class HSQLDBCacheUtilsTests {
     }
 
     @Test
+    public void testAfterNegative() {
+        ArbitraryResourceData data = new ArbitraryResourceData();
+        data.created = 10L;
+        data.name = "Joe";
+
+        filterListByMap(
+                List.of(data),
+                NAME_LEVEL, new HashMap<>(Map.of(AFTER, 11L)),
+                0
+        );
+    }
+
+    @Test
     public void testBeforePositive(){
         ArbitraryResourceData data = new ArbitraryResourceData();
         data.created = 10L;
@@ -310,6 +323,19 @@ public class HSQLDBCacheUtilsTests {
                 List.of(data),
                 NAME_LEVEL, new HashMap<>(Map.of(BEFORE, 11L)),
                 1
+        );
+    }
+
+    @Test
+    public void testBeforeNegative(){
+        ArbitraryResourceData data = new ArbitraryResourceData();
+        data.created = 10L;
+        data.name = "Joe";
+
+        filterListByMap(
+                List.of(data),
+                NAME_LEVEL, new HashMap<>(Map.of(BEFORE, 9L)),
+                0
         );
     }
 

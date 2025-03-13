@@ -183,6 +183,14 @@ public class HSQLDBCacheUtils {
         // retain only candidates with names
         Stream<ArbitraryResourceData> stream = candidates.stream().filter(candidate -> candidate.name != null );
 
+        if(after.isPresent()) {
+            stream = stream.filter( candidate -> candidate.created > after.get().longValue() );
+        }
+
+        if(before.isPresent()) {
+            stream = stream.filter( candidate -> candidate.created < before.get().longValue() );
+        }
+
         if(exclude.isPresent())
             stream = stream.filter( candidate -> !exclude.get().get().contains( candidate.name ));
 
