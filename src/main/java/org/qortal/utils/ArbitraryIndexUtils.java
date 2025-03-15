@@ -83,10 +83,10 @@ public class ArbitraryIndexUtils {
                     null,
                     null,
                     null,
-                    0L,
-                    0L,
-                    0,
-                    0,
+                    null,
+                    null,
+                    null,
+                    null,
                     true);
 
             List<ArbitraryDataIndexDetail> indexDetails = new ArrayList<>();
