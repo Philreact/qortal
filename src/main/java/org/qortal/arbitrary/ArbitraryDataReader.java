@@ -439,7 +439,15 @@ public class ArbitraryDataReader {
             // Ensure the complete hash matches the joined chunks
             if (!Arrays.equals(arbitraryDataFile.digest(), transactionData.getData())) {
                 // Delete the invalid file
-                arbitraryDataFile.delete();
+                LOGGER.info("Deleting invalid file: path = " + arbitraryDataFile.getFilePath());
+
+                if( arbitraryDataFile.delete() ) {
+                    LOGGER.info("Deleted invalid file successfully: path = " + arbitraryDataFile.getFilePath());
+                }
+                else {
+                    LOGGER.warn("Could not delete invalid file: path = " + arbitraryDataFile.getFilePath());
+                }
+
                 throw new DataException("Unable to validate complete file hash");
             }
         }

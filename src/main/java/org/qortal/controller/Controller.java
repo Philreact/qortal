@@ -547,6 +547,16 @@ public class Controller extends Thread {
 		ArbitraryDataStorageManager.getInstance().start();
 		ArbitraryDataRenderManager.getInstance().start();
 
+		// start rebuild arbitrary resource cache timer task
+		if( Settings.getInstance().isRebuildArbitraryResourceCacheTaskEnabled() ) {
+			new Timer().schedule(
+				new RebuildArbitraryResourceCacheTask(),
+				Settings.getInstance().getRebuildArbitraryResourceCacheTaskDelay() * RebuildArbitraryResourceCacheTask.MILLIS_IN_MINUTE,
+				Settings.getInstance().getRebuildArbitraryResourceCacheTaskPeriod() * RebuildArbitraryResourceCacheTask.MILLIS_IN_HOUR
+			);
+		}
+
+
 		LOGGER.info("Starting online accounts manager");
 		OnlineAccountsManager.getInstance().start();
 

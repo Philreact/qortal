@@ -58,17 +58,22 @@ public class ArbitraryDataCacheManager extends Thread {
 
         try {
             while (!Controller.isStopping()) {
-                Thread.sleep(500L);
+                try {
+                    Thread.sleep(500L);
 
-                // Process queue
-                processResourceQueue();
+                    // Process queue
+                    processResourceQueue();
+                } catch (Exception e) {
+                    LOGGER.error(e.getMessage(), e);
+                    Thread.sleep(600_000L); // wait 10 minutes to continue
+                }
             }
-        } catch (InterruptedException e) {
-            // Fall through to exit thread
-        }
 
-        // Clear queue before terminating thread
-        processResourceQueue();
+            // Clear queue before terminating thread
+            processResourceQueue();
+        } catch (Exception e) {
+            LOGGER.error(e.getMessage(), e);
+        }
     }
 
     public void shutdown() {
