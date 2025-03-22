@@ -308,7 +308,13 @@ public class ArbitraryTransaction extends Transaction {
 			// Add/update arbitrary resource caches, but don't update the status as this involves time-consuming
 			// disk reads, and is more prone to failure. The status will be updated on metadata retrieval, or when
 			// accessing the resource.
-			this.updateArbitraryResourceCacheIncludingMetadata(repository, new HashSet<>(0), new HashMap<>(0));
+			// Also, must add this transaction as a latest transaction, since the it has not been saved to the
+			// repository yet.
+			this.updateArbitraryResourceCacheIncludingMetadata(
+				repository,
+				Set.of(new ArbitraryTransactionDataHashWrapper(arbitraryTransactionData)),
+				new HashMap<>(0)
+			);
 
 			repository.saveChanges();
 
@@ -329,6 +335,19 @@ public class ArbitraryTransaction extends Transaction {
 	public void orphan() throws DataException {
 		// Wrap and delegate payment processing to Payment class.
 		new Payment(this.repository).orphan(arbitraryTransactionData.getSenderPublicKey(), arbitraryTransactionData.getPayments());
+
+		try {
+			ArbitraryResourceData arbitraryResourceData = new ArbitraryResourceData();
+			arbitraryResourceData.service = this.arbitraryTransactionData.getService();
+			arbitraryResourceData.name = this.arbitraryTransactionData.getName();
+			arbitraryResourceData.identifier = this.arbitraryTransactionData.getIdentifier();
+
+			this.repository.getArbitraryRepository().delete(arbitraryResourceData);
+		} catch (DataException e) {
+			throw e;
+		} catch (Exception e ) { // if anything is wrong with the code above, we need to know
+			LOGGER.error(e.getMessage(), e);
+		}
 	}
 
 	@Override

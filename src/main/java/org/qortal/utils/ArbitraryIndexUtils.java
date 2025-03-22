@@ -111,7 +111,7 @@ public class ArbitraryIndexUtils {
                         indexDetails.add( new ArbitraryDataIndexDetail(indexResource.name, rank, indices.get(rank - 1) ));
                     }
                 } catch (InvalidFormatException e) {
-                   LOGGER.warn("invalid format, skipping: " + indexResource);
+                   LOGGER.debug("invalid format, skipping: " + indexResource);
                 }
             }
 
