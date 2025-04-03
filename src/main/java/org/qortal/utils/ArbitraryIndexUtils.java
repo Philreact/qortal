@@ -3,6 +3,7 @@ package org.qortal.utils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -108,10 +109,12 @@ public class ArbitraryIndexUtils {
                     // rank and create index detail for each index in this index resource
                     for( int rank = 1; rank <= indices.size(); rank++ ) {
 
-                        indexDetails.add( new ArbitraryDataIndexDetail(indexResource.name, rank, indices.get(rank - 1) ));
+                        indexDetails.add( new ArbitraryDataIndexDetail(indexResource.name, rank, indices.get(rank - 1), indexResource.identifier ));
                     }
                 } catch (InvalidFormatException e) {
                    LOGGER.debug("invalid format, skipping: " + indexResource);
+                } catch (UnrecognizedPropertyException e) {
+                    LOGGER.debug("unrecognized property, skipping " + indexResource);
                 }
             }
 
@@ -137,6 +140,29 @@ public class ArbitraryIndexUtils {
             }
 
             LOGGER.info("loaded indices by term");
+
+            LOGGER.debug("processing indices by issuer ...");
+            Map<String, List<ArbitraryDataIndexDetail>> indicesByIssuer
+                = indexDetails.stream().collect(
+                    Collectors.toMap(
+                        detail -> detail.issuer,        // map by issuer
+                        detail -> List.of(detail),      // create list for issuer
+                        (list1, list2)                  // merge lists for same issuer
+                                -> Stream.of(list1, list2)
+                                .flatMap(List::stream)
+                                .collect(Collectors.toList())
+                    )
+            );
+
+            LOGGER.info("processed indices by issuer: count = " + indicesByIssuer.size());
+
+            // lock, clear old, load new
+            synchronized( IndexCache.getInstance().getIndicesByIssuer() ) {
+                IndexCache.getInstance().getIndicesByIssuer().clear();
+                IndexCache.getInstance().getIndicesByIssuer().putAll(indicesByIssuer);
+            }
+
+            LOGGER.info("loaded indices by issuer");
         }
     }
 

@@ -1,7 +1,5 @@
 package org.qortal.data.arbitrary;
 
-import org.qortal.arbitrary.misc.Service;
-
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
 
@@ -12,20 +10,20 @@ public class ArbitraryDataIndexDetail {
     public int rank;
     public String term;
     public String name;
-    public Service service;
-    public String identifier;
+    public int category;
     public String link;
+    public String indexIdentifer;
 
     public ArbitraryDataIndexDetail() {}
 
-    public ArbitraryDataIndexDetail(String issuer, int rank, ArbitraryDataIndex index) {
+    public ArbitraryDataIndexDetail(String issuer, int rank, ArbitraryDataIndex index, String indexIdentifer) {
         this.issuer = issuer;
         this.rank = rank;
-        this.term = index.term;
-        this.name = index.name;
-        this.service = index.service;
-        this.identifier = index.identifier;
-        this.link = index.link;
+        this.term = index.t;
+        this.name = index.n;
+        this.category = index.c;
+        this.link = index.l;
+        this.indexIdentifer = indexIdentifer;
     }
 
     @Override
@@ -35,9 +33,9 @@ public class ArbitraryDataIndexDetail {
                 ", rank=" + rank +
                 ", term='" + term + '\'' +
                 ", name='" + name + '\'' +
-                ", service=" + service +
-                ", identifier='" + identifier + '\'' +
+                ", category=" + category +
                 ", link='" + link + '\'' +
+                ", indexIdentifer='" + indexIdentifer + '\'' +
                 '}';
     }
 }

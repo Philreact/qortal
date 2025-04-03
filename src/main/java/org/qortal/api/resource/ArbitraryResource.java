@@ -1229,7 +1229,7 @@ public class ArbitraryResource {
 			= indices.stream()
 				.collect(
 					Collectors.groupingBy(
-						index -> new ArbitraryDataIndexScoreKey(index.name, index.service, index.link),
+						index -> new ArbitraryDataIndexScoreKey(index.name, index.category, index.link),
 						Collectors.summingDouble(detail -> 1.0 / detail.rank)
 					)
 				);
@@ -1242,13 +1242,40 @@ public class ArbitraryResource {
 				new ArbitraryDataIndexScorecard(
 					entry.getValue(),
 					entry.getKey().name,
-					entry.getKey().service,
+					entry.getKey().category,
 					entry.getKey().link)
 				)
 				.sorted(Comparator.comparingDouble(ArbitraryDataIndexScorecard::getScore).reversed())
 				.collect(Collectors.toList());
 
 		return scorecards;
+	}
+
+	@GET
+	@Path("/indices/{name}/{idPrefix}")
+	@Operation(
+			summary = "Find matching arbitrary resource indices for a registered name and identifier prefix",
+			description = "",
+			responses = {
+					@ApiResponse(
+							description = "indices",
+							content = @Content(
+									array = @ArraySchema(
+											schema = @Schema(
+													implementation = ArbitraryDataIndexDetail.class
+											)
+									)
+							)
+					)
+			}
+	)
+	public List<ArbitraryDataIndexDetail> searchIndicesByName(@PathParam("name") String name, @PathParam("idPrefix") String idPrefix) {
+
+		return
+			IndexCache.getInstance().getIndicesByIssuer()
+				.getOrDefault(name, new ArrayList<>(0)).stream()
+					.filter( indexDetail -> indexDetail.indexIdentifer.startsWith(idPrefix))
+					.collect(Collectors.toList());
 	}
 
 	// Shared methods

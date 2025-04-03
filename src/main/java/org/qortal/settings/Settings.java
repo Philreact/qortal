@@ -527,7 +527,7 @@ public class Settings {
 	 *
 	 * The frequency at which the arbitrary indices are cached.
 	 */
-	private int arbitraryIndexingFrequency = 1;
+	private int arbitraryIndexingFrequency = 10;
 
     private boolean rebuildArbitraryResourceCacheTaskEnabled = false;
 

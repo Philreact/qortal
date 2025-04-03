@@ -10,15 +10,15 @@ public class ArbitraryDataIndexScorecard {
 
     public double score;
     public String name;
-    public Service service;
+    public int category;
     public String link;
 
     public ArbitraryDataIndexScorecard() {}
 
-    public ArbitraryDataIndexScorecard(double score, String name, Service service, String link) {
+    public ArbitraryDataIndexScorecard(double score, String name, int category, String link) {
         this.score = score;
         this.name = name;
-        this.service = service;
+        this.category = category;
         this.link = link;
     }
 
@@ -31,7 +31,7 @@ public class ArbitraryDataIndexScorecard {
         return "ArbitraryDataIndexScorecard{" +
                 "score=" + score +
                 ", name='" + name + '\'' +
-                ", service=" + service +
+                ", category=" + category +
                 ", link='" + link + '\'' +
                 '}';
     }

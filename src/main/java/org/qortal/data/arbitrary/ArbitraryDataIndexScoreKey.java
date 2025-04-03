@@ -10,14 +10,14 @@ import java.util.Objects;
 public class ArbitraryDataIndexScoreKey {
 
     public String name;
-    public Service service;
+    public int category;
     public String link;
 
     public ArbitraryDataIndexScoreKey() {}
 
-    public ArbitraryDataIndexScoreKey(String name, Service service, String link) {
+    public ArbitraryDataIndexScoreKey(String name, int category, String link) {
         this.name = name;
-        this.service = service;
+        this.category = category;
         this.link = link;
     }
 
@@ -26,20 +26,13 @@ public class ArbitraryDataIndexScoreKey {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ArbitraryDataIndexScoreKey that = (ArbitraryDataIndexScoreKey) o;
-        return Objects.equals(name, that.name) && service == that.service && Objects.equals(link, that.link);
+        return category == that.category && Objects.equals(name, that.name) && Objects.equals(link, that.link);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(name, service, link);
+        return Objects.hash(name, category, link);
     }
 
-    @Override
-    public String toString() {
-        return "ArbitraryDataIndexScoreKey{" +
-                "name='" + name + '\'' +
-                ", service=" + service +
-                ", link='" + link + '\'' +
-                '}';
-    }
+
 }

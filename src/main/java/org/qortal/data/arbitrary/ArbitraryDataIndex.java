@@ -8,30 +8,27 @@ import javax.xml.bind.annotation.XmlAccessorType;
 @XmlAccessorType(XmlAccessType.FIELD)
 public class ArbitraryDataIndex {
 
-    public String term;
-    public String name;
-    public Service service;
-    public String identifier;
-    public String link;
+    public String t;
+    public String n;
+    public int c;
+    public String l;
 
     public ArbitraryDataIndex() {}
 
-    public ArbitraryDataIndex(String term, String name, Service service, String identifier, String link) {
-        this.term = term;
-        this.name = name;
-        this.service = service;
-        this.identifier = identifier;
-        this.link = link;
+    public ArbitraryDataIndex(String t, String n, int c, String l) {
+        this.t = t;
+        this.n = n;
+        this.c = c;
+        this.l = l;
     }
 
     @Override
     public String toString() {
         return "ArbitraryDataIndex{" +
-                "term='" + term + '\'' +
-                ", name='" + name + '\'' +
-                ", service=" + service +
-                ", identifier='" + identifier + '\'' +
-                ", link='" + link + '\'' +
+                "t='" + t + '\'' +
+                ", n='" + n + '\'' +
+                ", c=" + c +
+                ", l='" + l + '\'' +
                 '}';
     }
 }
