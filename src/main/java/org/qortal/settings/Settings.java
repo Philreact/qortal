@@ -386,7 +386,7 @@ public class Settings {
 	/**
 	 * DB Cache Enabled?
 	 */
-	private boolean dbCacheEnabled = false;
+	private boolean dbCacheEnabled = true;
 
 	/**
 	 * DB Cache Thread Priority
