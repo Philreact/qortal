@@ -1,6 +1,7 @@
 package org.qortal.controller.arbitrary;
 
 import com.google.common.net.InetAddresses;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.arbitrary.ArbitraryDataFile;
@@ -23,8 +24,13 @@ import org.qortal.utils.NTP;
 
 import java.security.SecureRandom;
 import java.util.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class ArbitraryDataFileManager extends Thread {
@@ -64,6 +70,20 @@ public class ArbitraryDataFileManager extends Thread {
 
 
     public static int MAX_FILE_HASH_RESPONSES = 1000;
+
+    // Peer address → score + last updated time
+private final Map<String, PeerScoreEntry> peerReliabilityScores = Collections.synchronizedMap(new HashMap<>());
+
+private static class PeerScoreEntry {
+	int score;
+	long lastUpdated;
+
+	PeerScoreEntry(int score, long lastUpdated) {
+		this.score = score;
+		this.lastUpdated = lastUpdated;
+	}
+}
+
 
 
     private ArbitraryDataFileManager() {
@@ -106,6 +126,9 @@ public class ArbitraryDataFileManager extends Thread {
     public void cleanupRequestCache(Long now) {
         if (now == null) {
             return;
+        }
+        synchronized (peerReliabilityScores) {
+            peerReliabilityScores.entrySet().removeIf(entry -> now - entry.getValue().lastUpdated > 15 * 60 * 1000L);
         }
         final long requestMinimumTimestamp = now - ArbitraryDataManager.getInstance().ARBITRARY_REQUEST_TIMEOUT;
         arbitraryDataFileRequests.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue() < requestMinimumTimestamp);
@@ -306,7 +329,31 @@ public class ArbitraryDataFileManager extends Thread {
             LOGGER.debug("Forwarded arbitrary data file to peer {}", requestingPeer);
         }
     }
-
+    private void updatePeerScore(String peer, boolean success) {
+        long now = NTP.getTime();
+        synchronized (peerReliabilityScores) {
+            PeerScoreEntry entry = peerReliabilityScores.getOrDefault(peer, new PeerScoreEntry(0, now));
+            int updatedScore = success ? Math.min(entry.score + 1, 10) : Math.max(entry.score - 1, -5);
+            peerReliabilityScores.put(peer, new PeerScoreEntry(updatedScore, now));
+        }
+    }
+    
+    private int getPeerScore(String peer) {
+        long now = NTP.getTime();
+        synchronized (peerReliabilityScores) {
+            PeerScoreEntry entry = peerReliabilityScores.get(peer);
+            if (entry == null) return 0;
+    
+            // Expire after 15 minutes
+            if (now - entry.lastUpdated > 15 * 60 * 1000L) {
+                peerReliabilityScores.remove(peer);
+                return 0;
+            }
+    
+            return entry.score;
+        }
+    }
+    
 
     // Fetch data directly from peers
 
@@ -336,6 +383,59 @@ public class ArbitraryDataFileManager extends Thread {
     private void removeDirectConnectionInfo(ArbitraryDirectConnectionInfo connectionInfo) {
         this.directConnectionInfo.remove(connectionInfo);
     }
+
+    public boolean fetchDataFilesInParallel(byte[] signature) {
+        String signature58 = Base58.encode(signature);
+        List<ArbitraryDirectConnectionInfo> connectionInfoList = getDirectConnectionInfoForSignature(signature);
+    
+        if (connectionInfoList == null || connectionInfoList.isEmpty()) {
+            LOGGER.debug("No peers available for parallel chunk fetch for signature {}", signature58);
+            return false;
+        }
+    
+        // ✅ Sort by peer score, then hash count
+        connectionInfoList.sort(Comparator
+                .comparingInt((ArbitraryDirectConnectionInfo info) -> getPeerScore(info.getPeerAddress()))
+                .thenComparingInt(ArbitraryDirectConnectionInfo::getHashCount).reversed());
+    
+        int maxParallelConnections = Math.min(10, connectionInfoList.size()); // can tweak
+        ExecutorService executor = Executors.newFixedThreadPool(maxParallelConnections);
+    
+        List<Future<Boolean>> results = new ArrayList<>();
+        for (ArbitraryDirectConnectionInfo info : connectionInfoList) {
+            Callable<Boolean> task = () -> {
+                String address = info.getPeerAddress();
+                boolean success = Network.getInstance().requestDataFromPeer(address, signature);
+                updatePeerScore(address, success);
+    
+                if (success) {
+                    ArbitraryDataFileListManager.getInstance().addToSignatureRequests(signature58, false, true);
+                }
+                return success;
+            };
+            results.add(executor.submit(task));
+        }
+    
+        executor.shutdown();
+    
+        try {
+            // Wait up to 10 seconds
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+    
+            for (Future<Boolean> result : results) {
+                if (result.get()) return true;
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            LOGGER.error("Parallel chunk fetch failed", e);
+        }
+    
+        return false;
+    }
+    
+    
+    
 
     public boolean fetchDataFilesFromPeersForSignature(byte[] signature) {
         String signature58 = Base58.encode(signature);

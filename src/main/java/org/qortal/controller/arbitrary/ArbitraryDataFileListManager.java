@@ -272,7 +272,7 @@ public class ArbitraryDataFileListManager {
         if (!this.shouldMakeFileListRequestForSignature(signature58)) {
             // Check if we should make direct connections to peers
             if (this.shouldMakeDirectFileRequestsForSignature(signature58)) {
-                return ArbitraryDataFileManager.getInstance().fetchDataFilesFromPeersForSignature(signature);
+                return ArbitraryDataFileManager.getInstance().fetchDataFilesInParallel(signature);
             }
 
             LOGGER.trace("Skipping file list request for signature {} due to rate limit", signature58);
