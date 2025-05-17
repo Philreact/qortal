@@ -27,10 +27,14 @@ import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 public class ArbitraryDataFileManager extends Thread {
@@ -84,6 +88,89 @@ private static class PeerScoreEntry {
 	}
 }
 
+
+private static class ChunkFetchTask implements Callable<Boolean> {
+    private final byte[] chunkSignature;
+    private final Peer peer;
+    private final ArbitraryTransactionData txData;
+    private final byte[] parentSignature;
+
+    public ChunkFetchTask(byte[] chunkSignature, Peer peer, ArbitraryTransactionData txData, byte[] parentSignature) {
+        this.chunkSignature = chunkSignature;
+        this.peer = peer;
+        this.txData = txData;
+        this.parentSignature = parentSignature;
+    }
+
+    @Override
+    public Boolean call() {
+        String hash58 = Base58.encode(chunkSignature);
+
+        ArbitraryDataFileManager.getInstance().arbitraryDataFileHashResponses.removeIf(
+            entry -> Objects.equals(entry.getHash58(), hash58)
+        );
+
+        try {
+            ArbitraryDataFile file = ArbitraryDataFileManager.getInstance()
+                .fetchArbitraryDataFile(peer, null, txData, parentSignature, chunkSignature, null);
+
+            return file != null;
+        } catch (Exception e) {
+            LOGGER.debug("Exception while fetching chunk {}", hash58, e);
+            return false;
+        }
+    }
+}
+
+
+
+private class ChunkFetchManager {
+    private final ExecutorService executor;
+    private final Set<String> inProgress = ConcurrentHashMap.newKeySet();
+    private final Set<String> failed = ConcurrentHashMap.newKeySet();
+
+    public ChunkFetchManager(int maxConcurrentFetches) {
+        this.executor = Executors.newFixedThreadPool(maxConcurrentFetches);
+    }
+
+    public void fetchChunks(List<byte[]> chunkSignatures, Peer peer, ArbitraryTransactionData txData, byte[] parentSignature) {
+        List<Future<Boolean>> futures = new ArrayList<>();
+
+        for (byte[] chunkSignature : chunkSignatures) {
+            String chunkId = Base58.encode(chunkSignature);
+            if (inProgress.contains(chunkId)) continue;
+
+            inProgress.add(chunkId);
+            futures.add(executor.submit(new ChunkFetchTask(chunkSignature, peer, txData, parentSignature)));
+        }
+
+        for (int i = 0; i < futures.size(); i++) {
+            Future<Boolean> future = futures.get(i);
+            byte[] sig = chunkSignatures.get(i);
+            String chunkId = Base58.encode(sig);
+
+            try {
+                boolean success = future.get(4, TimeUnit.SECONDS);
+                if (!success) {
+                    failed.add(chunkId);
+                }
+            } catch (Exception e) {
+                LOGGER.debug("Chunk fetch failed for {}", chunkId, e);
+                failed.add(chunkId);
+            } finally {
+                inProgress.remove(chunkId);
+            }
+        }
+    }
+
+    public Set<String> getFailedChunks() {
+        return failed;
+    }
+
+    public void shutdown() {
+        executor.shutdownNow();
+    }
+}
 
 
     private ArbitraryDataFileManager() {
@@ -149,70 +236,51 @@ private static class PeerScoreEntry {
     // Fetch data files by hash
 
     public boolean fetchArbitraryDataFiles(Repository repository,
-                                           Peer peer,
-                                           byte[] signature,
-                                           ArbitraryTransactionData arbitraryTransactionData,
-                                           List<byte[]> hashes) throws DataException {
+                                       Peer peer,
+                                       byte[] signature,
+                                       ArbitraryTransactionData arbitraryTransactionData,
+                                       List<byte[]> hashes) throws DataException {
 
-        // Load data file(s)
-        ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(arbitraryTransactionData);
-        boolean receivedAtLeastOneFile = false;
+    // Load data file(s)
+    ArbitraryDataFile arbitraryDataFile = ArbitraryDataFile.fromTransactionData(arbitraryTransactionData);
 
-        // Now fetch actual data from this peer
-        for (byte[] hash : hashes) {
-            if (isStopping) {
-                return false;
-            }
+    // Determine which chunks are missing
+    List<byte[]> missingChunks = new ArrayList<>();
+    for (byte[] hash : hashes) {
+        if (!arbitraryDataFile.chunkExists(hash)) {
+            missingChunks.add(hash);
+        } else {
+            // Remove hash from responses since we already have it
             String hash58 = Base58.encode(hash);
-            if (!arbitraryDataFile.chunkExists(hash)) {
-                // Only request the file if we aren't already requesting it from someone else
-                if (!arbitraryDataFileRequests.containsKey(Base58.encode(hash))) {
-                    LOGGER.debug("Requesting data file {} from peer {}", hash58, peer);
-                    Long startTime = NTP.getTime();
-                    ArbitraryDataFile receivedArbitraryDataFile = fetchArbitraryDataFile(peer, null, arbitraryTransactionData, signature, hash, null);
-                    Long endTime = NTP.getTime();
-                    if (receivedArbitraryDataFile != null) {
-                        LOGGER.debug("Received data file {} from peer {}. Time taken: {} ms", receivedArbitraryDataFile.getHash58(), peer, (endTime-startTime));
-                        receivedAtLeastOneFile = true;
-
-                        // Remove this hash from arbitraryDataFileHashResponses now that we have received it
-                        arbitraryDataFileHashResponses.remove(hash58);
-                    }
-                    else {
-                        LOGGER.debug("Peer {} didn't respond with data file {} for signature {}. Time taken: {} ms", peer, Base58.encode(hash), Base58.encode(signature), (endTime-startTime));
-
-                        // Remove this hash from arbitraryDataFileHashResponses now that we have failed to receive it
-                        arbitraryDataFileHashResponses.remove(hash58);
-
-                        // Stop asking for files from this peer
-                        break;
-                    }
-                }
-                else {
-                    LOGGER.trace("Already requesting data file {} for signature {} from peer {}", arbitraryDataFile, Base58.encode(signature), peer);
-                }
-            }
-            else {
-                // Remove this hash from arbitraryDataFileHashResponses because we have a local copy
-                arbitraryDataFileHashResponses.remove(hash58);
-            }
+            arbitraryDataFileHashResponses.remove(hash58);
         }
-
-        if (receivedAtLeastOneFile) {
-            // Invalidate the hosted transactions cache as we are now hosting something new
-            ArbitraryDataStorageManager.getInstance().invalidateHostedTransactionsCache();
-
-            // Check if we have all the files we need for this transaction
-            if (arbitraryDataFile.allFilesExist()) {
-
-                // We have all the chunks for this transaction, so we should invalidate the transaction's name's
-                // data cache so that it is rebuilt the next time we serve it
-                ArbitraryDataManager.getInstance().invalidateCache(arbitraryTransactionData);
-            }
-        }
-
-        return receivedAtLeastOneFile;
     }
+
+    // If there are no missing chunks, return early
+    if (missingChunks.isEmpty()) {
+        return true;
+    }
+
+    // Fetch missing chunks using multi-threaded manager
+    ChunkFetchManager fetchManager = new ChunkFetchManager(10); // Max 10 threads
+    fetchManager.fetchChunks(missingChunks, peer, arbitraryTransactionData, signature);
+    Set<String> failedChunks = fetchManager.getFailedChunks();
+    fetchManager.shutdown();
+
+    boolean receivedAtLeastOneFile = failedChunks.size() < missingChunks.size();
+
+    // If at least one file was received, trigger cache updates
+    if (receivedAtLeastOneFile) {
+        ArbitraryDataStorageManager.getInstance().invalidateHostedTransactionsCache();
+
+        if (arbitraryDataFile.allFilesExist()) {
+            ArbitraryDataManager.getInstance().invalidateCache(arbitraryTransactionData);
+        }
+    }
+
+    return receivedAtLeastOneFile;
+}
+
 
     private ArbitraryDataFile fetchArbitraryDataFile(Peer peer, Peer requestingPeer, ArbitraryTransactionData arbitraryTransactionData, byte[] signature, byte[] hash, Message originalMessage) throws DataException {
         ArbitraryDataFile existingFile = ArbitraryDataFile.fromHash(hash, signature);
@@ -384,56 +452,129 @@ private static class PeerScoreEntry {
         this.directConnectionInfo.remove(connectionInfo);
     }
 
+    public boolean fetchDataFilesWithSmartStrategy(byte[] signature) {
+        List<ArbitraryDirectConnectionInfo> peers = getDirectConnectionInfoForSignature(signature);
+        if (peers == null || peers.isEmpty()) return false;
+
+        if (peers.size() >= 3) {
+            boolean success = fetchDataFilesInParallel(signature);
+            if (success) return true;
+        }
+
+        return fetchDataFilesFromPeersForSignature(signature);
+    }
+
+   
+
+    private static final int CORES = Runtime.getRuntime().availableProcessors();
+    private static final ExecutorService sharedChunkExecutor = new ThreadPoolExecutor(
+        CORES * 4, CORES * 8,
+        60L, TimeUnit.SECONDS,
+        new LinkedBlockingQueue<>(CORES * 16),
+        new ThreadPoolExecutor.CallerRunsPolicy()
+    );
+    
     public boolean fetchDataFilesInParallel(byte[] signature) {
         String signature58 = Base58.encode(signature);
         List<ArbitraryDirectConnectionInfo> connectionInfoList = getDirectConnectionInfoForSignature(signature);
+        LOGGER.debug("Found {} direct peers for signature {}: {}", 
+        connectionInfoList.size(), 
+        Base58.encode(signature), 
+        connectionInfoList.stream()
+            .map(info -> String.format("%s (%d chunks)", info.getPeerAddress(), info.getHashCount()))
+            .collect(Collectors.toList())
+    );
     
         if (connectionInfoList == null || connectionInfoList.isEmpty()) {
             LOGGER.debug("No peers available for parallel chunk fetch for signature {}", signature58);
             return false;
         }
     
-        // ✅ Sort by peer score, then hash count
         connectionInfoList.sort(Comparator
                 .comparingInt((ArbitraryDirectConnectionInfo info) -> getPeerScore(info.getPeerAddress()))
                 .thenComparingInt(ArbitraryDirectConnectionInfo::getHashCount).reversed());
     
-        int maxParallelConnections = Math.min(10, connectionInfoList.size()); // can tweak
-        ExecutorService executor = Executors.newFixedThreadPool(maxParallelConnections);
+        int batchSize = 6;
+        int offset = 0;
     
-        List<Future<Boolean>> results = new ArrayList<>();
-        for (ArbitraryDirectConnectionInfo info : connectionInfoList) {
-            Callable<Boolean> task = () -> {
-                String address = info.getPeerAddress();
-                boolean success = Network.getInstance().requestDataFromPeer(address, signature);
-                updatePeerScore(address, success);
-    
-                if (success) {
-                    ArbitraryDataFileListManager.getInstance().addToSignatureRequests(signature58, false, true);
-                }
-                return success;
-            };
-            results.add(executor.submit(task));
-        }
-    
-        executor.shutdown();
-    
-        try {
-            // Wait up to 10 seconds
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
-            }
-    
-            for (Future<Boolean> result : results) {
-                if (result.get()) return true;
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            LOGGER.error("Parallel chunk fetch failed", e);
+        while (offset < connectionInfoList.size()) {
+            List<ArbitraryDirectConnectionInfo> batch = connectionInfoList.subList(offset, Math.min(offset + batchSize, connectionInfoList.size()));
+            boolean success = fetchFromSubsetInParallel(batch, signature, signature58);
+            if (success) return true;
+            offset += batchSize;
         }
     
         return false;
     }
     
+    private boolean fetchFromSubsetInParallel(List<ArbitraryDirectConnectionInfo> peers, byte[] signature, String signature58) {
+        ExecutorCompletionService<Boolean> completionService = new ExecutorCompletionService<>(sharedChunkExecutor);
+        List<Future<Boolean>> futures = new ArrayList<>();
+    
+        for (ArbitraryDirectConnectionInfo info : peers) {
+            Future<Boolean> future = completionService.submit(() -> {
+                String peerAddress = info.getPeerAddress();
+                boolean success = tryPeerWithFallbacks(peerAddress, signature);
+                updatePeerScore(peerAddress, success);
+    
+                if (success) {
+                    LOGGER.debug("Successfully fetched data from {}", peerAddress);
+                    ArbitraryDataFileListManager.getInstance().addToSignatureRequests(signature58, false, true);
+                }
+    
+                return success;
+            });
+            futures.add(future);
+        }
+    
+        try {
+            for (Future<Boolean> completed : futures) {
+                try {
+                    if (completed != null && completed.get(3, TimeUnit.SECONDS)) {
+                        for (Future<Boolean> f : futures) {
+                            if (!f.isDone()) {
+                                f.cancel(true);
+                            }
+                        }
+                        return true;
+                    }
+                } catch (TimeoutException e) {
+                    LOGGER.debug("Peer task timed out");
+                } catch (InterruptedException | ExecutionException e) {
+                    LOGGER.error("Error during parallel peer fetch", e);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Unexpected error in peer fetch loop", e);
+        }
+    
+        return false;
+    }
+    
+    private boolean tryPeerWithFallbacks(String peerAddress, byte[] signature) {
+        String[] parts = peerAddress.split(":");
+        String host = parts[0];
+        String defaultAddr = host + ":" + Settings.getInstance().getDefaultListenPort();
+    
+        if (Network.getInstance().requestDataFromPeer(peerAddress, signature)) return true;
+    
+        if (!peerAddress.equals(defaultAddr)) {
+            if (Network.getInstance().requestDataFromPeer(defaultAddr, signature)) return true;
+        }
+    
+        List<PeerData> knownPeers = Network.getInstance().getAllKnownPeers().stream()
+                .filter(p -> p.getAddress().getHost().equals(host))
+                .collect(Collectors.toList());
+    
+        for (PeerData peer : knownPeers) {
+            String altAddr = peer.getAddress().toString();
+            if (!altAddr.equals(peerAddress) && !altAddr.equals(defaultAddr)) {
+                if (Network.getInstance().requestDataFromPeer(altAddr, signature)) return true;
+            }
+        }
+    
+        return false;
+    }
     
     
 
