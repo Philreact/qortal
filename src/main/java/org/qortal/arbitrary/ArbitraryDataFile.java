@@ -529,48 +529,46 @@ public class ArbitraryDataFile {
     public boolean allChunksExist() {
         try {
             if (this.metadataHash == null) {
-                // We don't have any metadata so can't check if we have the chunks
-                // Even if this transaction has no chunks, we don't have the file either (already checked above)
+                LOGGER.info("allChunksExist: metadataHash is null for signature {}", Base58.encode(this.signature));
                 return false;
             }
-
+    
             if (this.metadataFile == null) {
                 this.metadataFile = ArbitraryDataFile.fromHash(this.metadataHash, this.signature);
             }
-
-            // If the metadata file doesn't exist, we can't check if we have the chunks
+    
             if (!metadataFile.getFilePath().toFile().exists()) {
+                LOGGER.info("allChunksExist: metadata file does not exist at {}", metadataFile.getFilePath());
                 return false;
             }
-
+    
             if (this.metadata == null) {
                 this.setMetadata(new ArbitraryDataTransactionMetadata(this.metadataFile.getFilePath()));
             }
-
-            // Read the metadata
+    
             List<byte[]> chunks = metadata.getChunks();
-
-            // If the chunks array is empty, then this resource has no chunks,
-            // so we must return false to avoid confusing the caller.
             if (chunks.isEmpty()) {
+                LOGGER.info("allChunksExist: metadata contains no chunks for signature {}", Base58.encode(this.signature));
                 return false;
             }
-
-            // Otherwise, we need to check each chunk individually
+    
             for (byte[] chunkHash : chunks) {
                 ArbitraryDataFileChunk chunk = ArbitraryDataFileChunk.fromHash(chunkHash, this.signature);
                 if (!chunk.exists()) {
+                    LOGGER.info("allChunksExist: missing chunk {}", Base58.encode(chunkHash));
                     return false;
                 }
             }
-
+    
+            LOGGER.info("allChunksExist: all chunks are present for signature {}", Base58.encode(this.signature));
             return true;
-
+    
         } catch (DataException e) {
-            // Something went wrong, so assume we don't have all the chunks
+            LOGGER.info("allChunksExist: exception occurred for signature {}: {}", Base58.encode(this.signature), e.getMessage());
             return false;
         }
     }
+    
 
     public boolean anyChunksExist() throws DataException {
         try {

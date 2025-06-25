@@ -1928,7 +1928,7 @@ public String finalizeUpload(
 							}
 						}
 					}
-					Thread.sleep(3000L);
+					// Thread.sleep(3000L);
 				}
 			}
 	
@@ -2082,7 +2082,7 @@ if (!response.isCommitted()) {
     response.getWriter().write(" ");
 }
 
-		} catch (IOException | InterruptedException  | ApiException | DataException e) {
+		} catch (IOException | ApiException | DataException e) {
 			LOGGER.error(String.format("Unable to load %s %s: %s", service, name, e.getMessage()), e);
 			throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.FILE_NOT_FOUND, e.getMessage());
 		}

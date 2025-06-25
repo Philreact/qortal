@@ -982,7 +982,7 @@ public class Network {
         if (maxThreadsForMessageType != null) {
             Integer threadCount = threadsPerMessageType.get(message.getType());
             if (threadCount != null && threadCount >= maxThreadsForMessageType) {
-                LOGGER.trace("Discarding {} message as there are already {} active threads", message.getType().name(), threadCount);
+                LOGGER.info("Discarding {} message as there are already {} active threads", message.getType().name(), threadCount);
                 return;
             }
         }
@@ -1407,6 +1407,7 @@ public class Network {
         if (ipAddress == null) {
             return null;
         }
+        LOGGER.info("our external address: {}", ipAddress);
         return String.format("%s:%d", ipAddress, this.ourExternalPort);
     }
 

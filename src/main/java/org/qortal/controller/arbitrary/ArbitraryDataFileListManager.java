@@ -319,6 +319,8 @@ public class ArbitraryDataFileListManager {
         // Poll to see if data has arrived
         final long singleWait = 100;
         long totalWait = 0;
+        long startTime = System.currentTimeMillis();
+
         while (totalWait < ArbitraryDataManager.ARBITRARY_REQUEST_TIMEOUT) {
             try {
                 Thread.sleep(singleWait);
@@ -327,14 +329,28 @@ public class ArbitraryDataFileListManager {
             }
 
             requestEntry = arbitraryDataFileListRequests.get(id);
-            if (requestEntry == null)
+            if (requestEntry == null) {
+                LOGGER.info("Request entry is null for ID: {}", id);
                 return false;
+            }
+        
+            // Log full contents of the entry
+            LOGGER.info("Polling request entry for ID {} → signature: {}, peer: {}, time: {}",
+                id,
+                requestEntry.getA(),
+                requestEntry.getB(),
+                requestEntry.getC()
+            );
 
-            if (requestEntry.getA() == null)
-                break;
+                if (requestEntry.getA() == null) {
+                    LOGGER.info("File list received (requestEntry.getA() is null) for ID: {}", id);
+                    break;
+                }
 
             totalWait += singleWait;
         }
+        long elapsed = System.currentTimeMillis() - startTime;
+LOGGER.info("fetchArbitraryDataFileList completed in {} ms for ID: {}", elapsed, id);
         return true;
     }
 
@@ -398,18 +414,49 @@ public class ArbitraryDataFileListManager {
 
     public void deleteFileListRequestsForSignature(byte[] signature) {
         String signature58 = Base58.encode(signature);
-        for (Iterator<Map.Entry<Integer, Triple<String, Peer, Long>>> it = arbitraryDataFileListRequests.entrySet().iterator(); it.hasNext();) {
-            Map.Entry<Integer, Triple<String, Peer, Long>> entry = it.next();
-            if (entry == null || entry.getKey() == null || entry.getValue() != null) {
+    
+        LOGGER.info("Marking file list requests as completed for signature: {}", signature58);
+    
+        int skipped = 0;
+        int updated = 0;
+    
+        for (Map.Entry<Integer, Triple<String, Peer, Long>> entry : arbitraryDataFileListRequests.entrySet()) {
+            if (entry == null) {
+                LOGGER.debug("Skipping entry: entry itself is null");
+                skipped++;
                 continue;
             }
+    
+            if (entry.getKey() == null) {
+                LOGGER.debug("Skipping entry: entry key is null");
+                skipped++;
+                continue;
+            }
+    
+            if (entry.getValue() == null) {
+                LOGGER.debug("Skipping entry: entry value is null (ID: {})", entry.getKey());
+                skipped++;
+                continue;
+            }
+    
             if (Objects.equals(entry.getValue().getA(), signature58)) {
-                // Update requests map to reflect that we've received all chunks
-                Triple<String, Peer, Long> newEntry = new Triple<>(null, null, entry.getValue().getC());
-                arbitraryDataFileListRequests.put(entry.getKey(), newEntry);
+                Integer messageId = entry.getKey();
+                Peer requestingPeer = entry.getValue().getB();
+                Long requestTime = entry.getValue().getC();
+    
+                LOGGER.info(" → Completing request ID: {}, peer: {}, time: {}", messageId, requestingPeer, requestTime);
+    
+                // Mark the request as completed
+                Triple<String, Peer, Long> newEntry = new Triple<>(null, null, requestTime);
+                arbitraryDataFileListRequests.put(messageId, newEntry);
+                updated++;
             }
         }
+    
+        LOGGER.info("Finished cleanup: {} updated, {} skipped due to null", updated, skipped);
     }
+    
+    
 
     // Network handlers
 
