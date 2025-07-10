@@ -4,6 +4,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -17,7 +19,16 @@ public class PeerSendManager {
 
     private final BlockingQueue<Message> queue = new LinkedBlockingQueue<>();
     private final Peer peer;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(); // One thread per peer
+   private static final AtomicInteger threadCount = new AtomicInteger(1);
+
+private final ExecutorService executor = Executors.newSingleThreadExecutor(new ThreadFactory() {
+    @Override
+    public Thread newThread(Runnable r) {
+        Thread t = new Thread(r);
+        t.setName("PeerSendManager-" + peer.getResolvedAddress().getHostString() + "-" + threadCount.getAndIncrement());
+        return t;
+    }
+});
 
     public PeerSendManager(Peer peer) {
         this.peer = peer;
@@ -64,6 +75,7 @@ public class PeerSendManager {
                                 peer,
                                 MAX_RETRIES);
                         peer.disconnect("SendMessage retries exceeded");
+                         queue.clear();
                         break;
                     }
 
@@ -80,11 +92,19 @@ public class PeerSendManager {
         });
     }
 
-    public void queueMessage(Message message) {
-        this.queue.offer(message);
-    }
+   private volatile long lastUsed = System.currentTimeMillis();
+
+public void queueMessage(Message message) {
+    lastUsed = System.currentTimeMillis();
+    this.queue.offer(message);
+}
+
+public boolean isIdle(long cutoffMillis) {
+    return System.currentTimeMillis() - lastUsed > cutoffMillis;
+}
 
     public void shutdown() {
+        queue.clear();
         executor.shutdownNow();
     }
 }

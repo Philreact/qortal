@@ -124,7 +124,7 @@ public class ArbitraryDataFileListManager {
         if (timeSinceLastAttempt > 15 * 1000L) {
             // We haven't tried for at least 15 seconds
 
-            if (networkBroadcastCount < 3) {
+            if (networkBroadcastCount < 12) {
                 // We've made less than 3 total attempts
                 return true;
             }
@@ -134,7 +134,7 @@ public class ArbitraryDataFileListManager {
         if (timeSinceLastAttempt > 60 * 1000L) {
             // We haven't tried for at least 1 minute
 
-            if (networkBroadcastCount < 8) {
+            if (networkBroadcastCount < 40) {
                 // We've made less than 8 total attempts
                 return true;
             }

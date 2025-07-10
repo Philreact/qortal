@@ -80,9 +80,30 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
     getOrCreateSendManager(peer).queueMessage(fileMessage);
 }
 
+
+
     private ArbitraryDataFileManager() {
         this.arbitraryDataFileHashResponseScheduler.scheduleAtFixedRate( this::processResponses, 60, 1, TimeUnit.SECONDS);
         this.arbitraryDataFileHashResponseScheduler.scheduleAtFixedRate(this::handleFileListRequestProcess, 60, 1, TimeUnit.SECONDS);
+       ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor();
+
+        cleaner.scheduleAtFixedRate(() -> {
+            long idleCutoff = TimeUnit.MINUTES.toMillis(2);
+            Iterator<Map.Entry<Peer, PeerSendManager>> iterator = peerSendManagers.entrySet().iterator();
+
+            while (iterator.hasNext()) {
+                Map.Entry<Peer, PeerSendManager> entry = iterator.next();
+                Peer peer = entry.getKey();
+                PeerSendManager manager = entry.getValue();
+
+                if (manager.isIdle(idleCutoff)) {
+                    iterator.remove(); // SAFE removal during iteration
+                    manager.shutdown();
+                    LOGGER.debug("Cleaned up PeerSendManager for peer {}", peer);
+                }
+            }
+        }, 0, 30, TimeUnit.MINUTES);
+        
     }
 
     public static ArbitraryDataFileManager getInstance() {
@@ -91,6 +112,8 @@ public void queueFileSendToPeer(Peer peer, Message fileMessage) {
 
         return instance;
     }
+
+
 
     @Override
     public void run() {
