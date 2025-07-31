@@ -86,7 +86,9 @@ public enum MessageType {
     GET_FOREIGN_FEES( 201, GetForeignFeesMessage::fromByteBuffer),
 
     ACTIVE_CHAT(210, ActiveChatMessage::fromByteBuffer),
-    GET_ACTIVE_CHAT(211, GetActiveChatMessage::fromByteBuffer);
+    GET_ACTIVE_CHAT(211, GetActiveChatMessage::fromByteBuffer),
+    PROCESS_TRANSACTION_RESPONSE(300, ProcessTransactionResponseMessage::fromByteBuffer),
+    PROCESS_TRANSACTION(301, ProcessTransactionMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 

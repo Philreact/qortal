@@ -115,6 +115,8 @@ import org.qortal.network.message.HeightV2Message;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.NamesMessage;
+import org.qortal.network.message.ProcessTransactionMessage;
+import org.qortal.network.message.ProcessTransactionResponseMessage;
 import org.qortal.network.message.SignaturesMessage;
 import org.qortal.network.message.TransactionSignaturesMessage;
 import org.qortal.network.message.TransactionsMessage;
@@ -127,6 +129,7 @@ import org.qortal.settings.Settings;
 import org.qortal.transaction.Transaction;
 import org.qortal.transaction.Transaction.TransactionType;
 import org.qortal.transform.TransformationException;
+import org.qortal.transform.transaction.TransactionTransformer;
 import org.qortal.utils.ArbitraryIndexUtils;
 import org.qortal.utils.Base58;
 import org.qortal.utils.ByteArray;
@@ -1601,6 +1604,9 @@ public class Controller extends Thread {
 			case GET_ACTIVE_CHAT:
 				onNetworkGetChatActiveMessage(peer, message);
 				break;
+			case PROCESS_TRANSACTION:
+				onNetworkProcessTransactionMessage(peer, message);
+				break;
 			case GET_ACCOUNT_TRANSACTIONS:
 				onNetworkGetAccountTransactionsMessage(peer, message);
 				break;
@@ -2051,6 +2057,93 @@ public class Controller extends Thread {
 			LOGGER.error(String.format("Repository issue while send active chats"), e);
 		}
 	}
+
+	private void sendUnknownMessage(Peer peer, Message originalMessage) {
+	Message errorMessage = new GenericUnknownMessage();
+	errorMessage.setId(originalMessage.getId());
+	if (!peer.sendMessage(errorMessage)) {
+		peer.disconnect("Failed to send error response");
+	}
+}
+
+
+	private void onNetworkProcessTransactionMessage(Peer peer, Message message) {
+	LOGGER.info("Received PROCESS_TRANSACTION message");
+
+	ProcessTransactionMessage processMessage = (ProcessTransactionMessage) message;
+	byte[] rawBytes = processMessage.getRawBytes();
+
+	// ✅ Reject if blockchain is not synced
+	final Long minLatestBlockTimestamp = NTP.getTime() - (60 * 60 * 1000L);
+	if (!Controller.getInstance().isUpToDate(minLatestBlockTimestamp)) {
+		LOGGER.warn("Rejecting transaction: blockchain is not up-to-date");
+		sendUnknownMessage(peer, message);
+		return;
+	}
+
+	TransactionData transactionData;
+	try {
+		transactionData = TransactionTransformer.fromBytes(rawBytes);
+	} catch (TransformationException e) {
+		LOGGER.warn("Failed to transform transaction bytes", e);
+		sendUnknownMessage(peer, message);
+		return;
+	}
+
+	if (transactionData == null) {
+		LOGGER.warn("Null TransactionData from transformation");
+		sendUnknownMessage(peer, message);
+		return;
+	}
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		Transaction transaction = Transaction.fromData(repository, transactionData);
+
+		if (!transaction.isSignatureValid()) {
+			LOGGER.warn("Invalid transaction signature from peer {}", peer);
+			sendUnknownMessage(peer, message);
+			return;
+		}
+
+		ReentrantLock blockchainLock = Controller.getInstance().getBlockchainLock();
+		if (!blockchainLock.tryLock(60, TimeUnit.SECONDS)) {
+			sendUnknownMessage(peer, message);
+			return;
+		}
+
+		try {
+			Transaction.ValidationResult result = transaction.importAsUnconfirmed();
+			if (result != Transaction.ValidationResult.OK) {
+				sendUnknownMessage(peer, message);
+				return;
+			}
+		} finally {
+			blockchainLock.unlock();
+		}
+
+		// ✅ Send success response
+		Message txMessage;
+		try {
+			txMessage = new ProcessTransactionResponseMessage(transactionData);
+		} catch (IOException e) {
+			LOGGER.error("Failed to serialize transaction response", e);
+			sendUnknownMessage(peer, message);
+			return;
+		}
+
+		txMessage.setId(message.getId());
+
+		if (!peer.sendMessage(txMessage)) {
+			peer.disconnect("Failed to send processed transaction response");
+		}
+
+	} catch (DataException | InterruptedException e) {
+		LOGGER.error("Error while processing transaction", e);
+		sendUnknownMessage(peer, message);
+	}
+}
+
+
 
 	private void onNetworkGetAccountTransactionsMessage(Peer peer, Message message) {
 		GetAccountTransactionsMessage getAccountTransactionsMessage = (GetAccountTransactionsMessage) message;
