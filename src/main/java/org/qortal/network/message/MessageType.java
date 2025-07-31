@@ -2,9 +2,8 @@ package org.qortal.network.message;
 
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.util.Map;
-
 import static java.util.Arrays.stream;
+import java.util.Map;
 import static java.util.stream.Collectors.toMap;
 
 public enum MessageType {
@@ -74,6 +73,8 @@ public enum MessageType {
     ACCOUNT_BALANCE(170, AccountBalanceMessage::fromByteBuffer),
     GET_ACCOUNT_BALANCE(171, GetAccountBalanceMessage::fromByteBuffer),
 
+
+
     NAMES(180, NamesMessage::fromByteBuffer),
     GET_ACCOUNT_NAMES(181, GetAccountNamesMessage::fromByteBuffer),
     GET_NAME(182, GetNameMessage::fromByteBuffer),
@@ -82,8 +83,10 @@ public enum MessageType {
     GET_ACCOUNT_TRANSACTIONS(191, GetAccountTransactionsMessage::fromByteBuffer),
 
     FOREIGN_FEES( 200, ForeignFeesMessage::fromByteBuffer),
-    GET_FOREIGN_FEES( 201, GetForeignFeesMessage::fromByteBuffer);
+    GET_FOREIGN_FEES( 201, GetForeignFeesMessage::fromByteBuffer),
 
+    ACTIVE_CHAT(210, ActiveChatMessage::fromByteBuffer),
+    GET_ACTIVE_CHAT(211, GetActiveChatMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 

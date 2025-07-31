@@ -1,52 +1,5 @@
 package org.qortal.controller;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider;
-import org.qortal.account.Account;
-import org.qortal.api.ApiService;
-import org.qortal.api.DomainMapService;
-import org.qortal.api.GatewayService;
-import org.qortal.api.resource.TransactionsResource;
-import org.qortal.block.Block;
-import org.qortal.block.BlockChain;
-import org.qortal.block.BlockChain.BlockTimingByHeight;
-import org.qortal.controller.arbitrary.*;
-import org.qortal.controller.hsqldb.HSQLDBBalanceRecorder;
-import org.qortal.controller.hsqldb.HSQLDBDataCacheManager;
-import org.qortal.controller.repository.NamesDatabaseIntegrityCheck;
-import org.qortal.controller.repository.PruneManager;
-import org.qortal.controller.tradebot.TradeBot;
-import org.qortal.data.account.AccountBalanceData;
-import org.qortal.data.account.AccountData;
-import org.qortal.data.block.BlockData;
-import org.qortal.data.block.BlockSummaryData;
-import org.qortal.data.naming.NameData;
-import org.qortal.data.network.PeerData;
-import org.qortal.data.transaction.ArbitraryTransactionData;
-import org.qortal.data.transaction.ChatTransactionData;
-import org.qortal.data.transaction.TransactionData;
-import org.qortal.event.Event;
-import org.qortal.event.EventBus;
-import org.qortal.globalization.Translator;
-import org.qortal.gui.Gui;
-import org.qortal.gui.SysTray;
-import org.qortal.network.Network;
-import org.qortal.network.Peer;
-import org.qortal.network.PeerAddress;
-import org.qortal.network.message.*;
-import org.qortal.repository.*;
-import org.qortal.repository.hsqldb.HSQLDBRepositoryFactory;
-import org.qortal.settings.Settings;
-import org.qortal.transaction.Transaction;
-import org.qortal.transaction.Transaction.TransactionType;
-import org.qortal.transform.TransformationException;
-import org.qortal.utils.*;
-
-import javax.xml.bind.annotation.XmlAccessType;
-import javax.xml.bind.annotation.XmlAccessorType;
-
 import java.awt.TrayIcon.MessageType;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -62,7 +15,21 @@ import java.security.Security;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -73,6 +40,99 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import javax.xml.bind.annotation.XmlAccessType;
+import javax.xml.bind.annotation.XmlAccessorType;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider;
+import org.qortal.account.Account;
+import org.qortal.api.ApiService;
+import org.qortal.api.DomainMapService;
+import org.qortal.api.GatewayService;
+import org.qortal.api.resource.TransactionsResource;
+import org.qortal.block.Block;
+import org.qortal.block.BlockChain;
+import org.qortal.block.BlockChain.BlockTimingByHeight;
+import org.qortal.controller.arbitrary.ArbitraryDataBuildManager;
+import org.qortal.controller.arbitrary.ArbitraryDataCacheManager;
+import org.qortal.controller.arbitrary.ArbitraryDataCleanupManager;
+import org.qortal.controller.arbitrary.ArbitraryDataFileListManager;
+import org.qortal.controller.arbitrary.ArbitraryDataFileManager;
+import org.qortal.controller.arbitrary.ArbitraryDataManager;
+import org.qortal.controller.arbitrary.ArbitraryDataRenderManager;
+import org.qortal.controller.arbitrary.ArbitraryDataStorageManager;
+import org.qortal.controller.arbitrary.ArbitraryMetadataManager;
+import org.qortal.controller.arbitrary.Follower;
+import org.qortal.controller.arbitrary.RebuildArbitraryResourceCacheTask;
+import org.qortal.controller.hsqldb.HSQLDBBalanceRecorder;
+import org.qortal.controller.hsqldb.HSQLDBDataCacheManager;
+import org.qortal.controller.repository.NamesDatabaseIntegrityCheck;
+import org.qortal.controller.repository.PruneManager;
+import org.qortal.controller.tradebot.TradeBot;
+import org.qortal.data.account.AccountBalanceData;
+import org.qortal.data.account.AccountData;
+import org.qortal.data.block.BlockData;
+import org.qortal.data.block.BlockSummaryData;
+import org.qortal.data.chat.ActiveChats;
+import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.naming.NameData;
+import org.qortal.data.network.PeerData;
+import org.qortal.data.transaction.ArbitraryTransactionData;
+import org.qortal.data.transaction.ChatTransactionData;
+import org.qortal.data.transaction.TransactionData;
+import org.qortal.event.Event;
+import org.qortal.event.EventBus;
+import org.qortal.globalization.Translator;
+import org.qortal.gui.Gui;
+import org.qortal.gui.SysTray;
+import org.qortal.network.Network;
+import org.qortal.network.Peer;
+import org.qortal.network.PeerAddress;
+import org.qortal.network.message.AccountBalanceMessage;
+import org.qortal.network.message.AccountMessage;
+import org.qortal.network.message.ActiveChatMessage;
+import org.qortal.network.message.BlockSummariesMessage;
+import org.qortal.network.message.BlockSummariesV2Message;
+import org.qortal.network.message.BlockV2Message;
+import org.qortal.network.message.CachedBlockMessage;
+import org.qortal.network.message.CachedBlockV2Message;
+import org.qortal.network.message.GenericUnknownMessage;
+import org.qortal.network.message.GetAccountBalanceMessage;
+import org.qortal.network.message.GetAccountMessage;
+import org.qortal.network.message.GetAccountNamesMessage;
+import org.qortal.network.message.GetAccountTransactionsMessage;
+import org.qortal.network.message.GetActiveChatMessage;
+import org.qortal.network.message.GetBlockMessage;
+import org.qortal.network.message.GetBlockSummariesMessage;
+import org.qortal.network.message.GetNameMessage;
+import org.qortal.network.message.GetPeersMessage;
+import org.qortal.network.message.GetSignaturesV2Message;
+import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
+import org.qortal.network.message.HeightV2Message;
+import org.qortal.network.message.Message;
+import org.qortal.network.message.MessageException;
+import org.qortal.network.message.NamesMessage;
+import org.qortal.network.message.SignaturesMessage;
+import org.qortal.network.message.TransactionSignaturesMessage;
+import org.qortal.network.message.TransactionsMessage;
+import org.qortal.repository.BlockArchiveReader;
+import org.qortal.repository.DataException;
+import org.qortal.repository.Repository;
+import org.qortal.repository.RepositoryManager;
+import org.qortal.repository.hsqldb.HSQLDBRepositoryFactory;
+import org.qortal.settings.Settings;
+import org.qortal.transaction.Transaction;
+import org.qortal.transaction.Transaction.TransactionType;
+import org.qortal.transform.TransformationException;
+import org.qortal.utils.ArbitraryIndexUtils;
+import org.qortal.utils.Base58;
+import org.qortal.utils.ByteArray;
+import org.qortal.utils.LoggingUtils;
+import org.qortal.utils.NTP;
+import org.qortal.utils.Triple;
 
 public class Controller extends Thread {
 
@@ -1440,7 +1500,6 @@ public class Controller extends Thread {
 
 	public void onNetworkMessage(Peer peer, Message message) {
 		LOGGER.trace(() -> String.format("Processing %s message from %s", message.getType().name(), peer));
-
 		// Ordered by message type value
 		switch (message.getType()) {
 			case GET_BLOCK:
@@ -1539,6 +1598,9 @@ public class Controller extends Thread {
 				onNetworkGetAccountBalanceMessage(peer, message);
 				break;
 
+			case GET_ACTIVE_CHAT:
+				onNetworkGetChatActiveMessage(peer, message);
+				break;
 			case GET_ACCOUNT_TRANSACTIONS:
 				onNetworkGetAccountTransactionsMessage(peer, message);
 				break;
@@ -1947,6 +2009,46 @@ public class Controller extends Thread {
 
 		} catch (DataException e) {
 			LOGGER.error(String.format("Repository issue while send balance for account %s and asset ID %d to peer %s", address, assetId, peer), e);
+		}
+	}
+
+	private void onNetworkGetChatActiveMessage(Peer peer, Message message) {
+		LOGGER.info("received active chat message");
+		GetActiveChatMessage getActiveChatMessage = (GetActiveChatMessage) message;
+		String address = getActiveChatMessage.getAddress();
+		ChatMessage.Encoding encoding = getActiveChatMessage.getEncoding();
+		Boolean hasChatReference = getActiveChatMessage.getHasChatReference();
+		LOGGER.info("active chat address: {}, encoding: {}, hasChatReference: {}", address, encoding, hasChatReference);
+		this.stats.getAccountBalanceMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			ActiveChats activeChatsData = repository.getChatRepository().getActiveChats(address, encoding, hasChatReference);
+
+			if (activeChatsData == null) {
+				LOGGER.info("active chat null");
+				// We don't have this account
+				this.stats.getAccountBalanceMessageStats.unknownAccounts.getAndIncrement();
+
+				// Send valid, yet unexpected message type in response, so peer doesn't have to wait for timeout
+				// LOGGER.debug(() -> String.format("Sending 'account unknown' response to peer %s for GET_ACCOUNT_BALANCE request for unknown account %s and asset ID %d", peer, address, assetId));
+
+				// Send generic 'unknown' message as it's very short
+				Message accountUnknownMessage = new GenericUnknownMessage();
+				accountUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(accountUnknownMessage))
+					peer.disconnect("failed to send active-chats-unknown response");
+				return;
+			}
+
+			ActiveChatMessage accountMessage = new ActiveChatMessage(activeChatsData, encoding);
+			accountMessage.setId(message.getId());
+
+			if (!peer.sendMessage(accountMessage)) {
+				peer.disconnect("failed to send account balance");
+			}
+
+		} catch (DataException e) {
+			LOGGER.error(String.format("Repository issue while send active chats"), e);
 		}
 	}
 

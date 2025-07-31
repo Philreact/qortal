@@ -1,6 +1,7 @@
 package org.qortal.utils;
 
 import com.google.common.primitives.Ints;
+
 import org.qortal.transform.TransformationException;
 import org.qortal.transform.Transformer;
 
@@ -12,6 +13,8 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+
+import com.google.common.primitives.Longs;
 
 public class Serialization {
 
@@ -182,5 +185,103 @@ public class Serialization {
 
 		return new String(bytes, StandardCharsets.UTF_8);
 	}
+
+	// Nullable data field (byte array) serialization
+public static void serializeNullableData(ByteArrayOutputStream bytes, byte[] data) throws IOException {
+	if (data == null) {
+		bytes.write(Ints.toByteArray(0));
+		return;
+	}
+
+	bytes.write(Ints.toByteArray(data.length));
+	bytes.write(data);
+}
+
+public static byte[] deserializeNullableData(ByteBuffer byteBuffer) {
+	int length = byteBuffer.getInt();
+	if (length == 0)
+		return null;
+
+	if (length > byteBuffer.remaining())
+		throw new IllegalStateException("Invalid data length");
+
+	byte[] bytes = new byte[length];
+	byteBuffer.get(bytes);
+	return bytes;
+}
+
+// Nullable String (non-sized) field
+public static void serializeNullableString(ByteArrayOutputStream bytes, String value) throws IOException {
+	if (value == null) {
+		bytes.write(Ints.toByteArray(0));
+		return;
+	}
+
+	byte[] stringBytes = value.getBytes(StandardCharsets.UTF_8);
+	bytes.write(Ints.toByteArray(stringBytes.length));
+	bytes.write(stringBytes);
+}
+
+public static String deserializeNullableString(ByteBuffer byteBuffer) {
+	int length = byteBuffer.getInt();
+	if (length == 0)
+		return null;
+
+	if (length > byteBuffer.remaining())
+		throw new IllegalStateException("Invalid string length");
+
+	byte[] bytes = new byte[length];
+	byteBuffer.get(bytes);
+	return new String(bytes, StandardCharsets.UTF_8);
+}
+
+// Nullable timestamp (Long)
+public static void serializeNullableTimestamp(ByteArrayOutputStream bytes, Long timestamp) throws IOException {
+	if (timestamp == null) {
+		bytes.write(Ints.toByteArray(0));
+		return;
+	}
+
+	bytes.write(Ints.toByteArray(8)); // size of long
+	bytes.write(Longs.toByteArray(timestamp));
+}
+
+public static Long deserializeNullableTimestamp(ByteBuffer buffer) {
+	int size = buffer.getInt();
+	if (size == 0)
+		return null;
+
+	if (size != 8 || size > buffer.remaining())
+		throw new IllegalStateException("Invalid timestamp size");
+
+	return buffer.getLong();
+}
+
+// Non-null timestamp
+public static void serializeTimestamp(ByteArrayOutputStream bytes, long timestamp) throws IOException {
+	bytes.write(Longs.toByteArray(timestamp));
+}
+
+public static long deserializeTimestamp(ByteBuffer buffer) {
+	return buffer.getLong();
+}
+
+// Serialize int
+public static void serializeInt(ByteArrayOutputStream bytes, int value) throws IOException {
+	bytes.write(Ints.toByteArray(value));
+}
+
+public static int deserializeInt(ByteBuffer buffer) {
+	return buffer.getInt();
+}
+
+// Serialize list length
+public static void serializeSizedInt(ByteArrayOutputStream bytes, int size) throws IOException {
+	bytes.write(Ints.toByteArray(size));
+}
+
+public static int deserializeSizedInt(ByteBuffer buffer) {
+	return buffer.getInt();
+}
 
 }
