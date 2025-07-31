@@ -5,6 +5,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
@@ -72,6 +74,7 @@ import org.qortal.controller.hsqldb.HSQLDBDataCacheManager;
 import org.qortal.controller.repository.NamesDatabaseIntegrityCheck;
 import org.qortal.controller.repository.PruneManager;
 import org.qortal.controller.tradebot.TradeBot;
+import org.qortal.crypto.Crypto;
 import org.qortal.data.account.AccountBalanceData;
 import org.qortal.data.account.AccountData;
 import org.qortal.data.block.BlockData;
@@ -107,11 +110,14 @@ import org.qortal.network.message.GetAccountTransactionsMessage;
 import org.qortal.network.message.GetActiveChatMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
+import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
 import org.qortal.network.message.GetPeersMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
+import org.qortal.network.message.GetUnitFeeMessage;
 import org.qortal.network.message.HeightV2Message;
+import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.NamesMessage;
@@ -120,6 +126,7 @@ import org.qortal.network.message.ProcessTransactionResponseMessage;
 import org.qortal.network.message.SignaturesMessage;
 import org.qortal.network.message.TransactionSignaturesMessage;
 import org.qortal.network.message.TransactionsMessage;
+import org.qortal.network.message.UnitFeeMessage;
 import org.qortal.repository.BlockArchiveReader;
 import org.qortal.repository.DataException;
 import org.qortal.repository.Repository;
@@ -1618,6 +1625,12 @@ public class Controller extends Thread {
 			case GET_NAME:
 				onNetworkGetNameMessage(peer, message);
 				break;
+			case GET_UNIT_FEE:
+				onNetworkGetUnitFeeMessage(peer, message);
+				break;
+			case GET_LAST_REFERENCE:
+				onNetworkGetLastReferenceMessage(peer, message);
+				break;
 
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
@@ -2018,6 +2031,99 @@ public class Controller extends Thread {
 		}
 	}
 
+
+		private void onNetworkGetUnitFeeMessage(Peer peer, Message message) {
+	GetUnitFeeMessage getUnitFeeMessage = (GetUnitFeeMessage) message;
+	String txTypeName = getUnitFeeMessage.txType();
+	Long timestamp = getUnitFeeMessage.timestamp();
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet();
+
+	try {
+		if (timestamp == null) {
+			timestamp = NTP.getTime();
+		}
+
+		// Convert txType string to enum
+		TransactionType txType = TransactionType.valueOf(txTypeName);
+
+		Constructor<?> constructor = txType.constructor;
+		Transaction transaction = (Transaction) constructor.newInstance(null, null);
+		long unitFee = transaction.getUnitFee(timestamp);
+
+		// Send response message
+		UnitFeeMessage response = new UnitFeeMessage(unitFee);
+		response.setId(message.getId());
+
+		if (!peer.sendMessage(response)) {
+			peer.disconnect("Failed to send GetUnitFeeResponseMessage");
+		}
+	} catch (IllegalArgumentException e) {
+		// Invalid txType string
+		LOGGER.debug("Invalid txType string in GetUnitFeeMessage: {}", txTypeName);
+	} catch (IllegalAccessException | InstantiationException | InvocationTargetException e) {
+		LOGGER.error("Exception while handling GetUnitFeeMessage", e);
+	}
+}
+	
+
+	private void onNetworkGetLastReferenceMessage(Peer peer, Message message) {
+		GetLastReferenceMessage getLastReferenceMessage = (GetLastReferenceMessage) message;
+		String address = getLastReferenceMessage.getAddress();
+	
+		this.stats.getAccountBalanceMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			if (!Crypto.isValidAddress(address)){
+				Message accountUnknownMessage = new GenericUnknownMessage();
+				accountUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(accountUnknownMessage))
+					peer.disconnect("failed to send account-unknown response");
+				return;
+			}
+			
+
+
+			AccountData accountData = repository.getAccountRepository().getAccount(address);
+
+			if (accountData == null) {
+				// We don't have this account
+				this.stats.getAccountBalanceMessageStats.unknownAccounts.getAndIncrement();
+
+				// Send valid, yet unexpected message type in response, so peer doesn't have to wait for timeout
+				LOGGER.debug(() -> String.format("Sending 'account unknown' response to peer %s for GET_ACCOUNT_BALANCE request for unknown account %s", peer, address));
+
+				// Send generic 'unknown' message as it's very short
+				Message accountUnknownMessage = new GenericUnknownMessage();
+				accountUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(accountUnknownMessage))
+					peer.disconnect("failed to send account-unknown response");
+				return;
+			}
+
+			byte[] lastReference = accountData.getReference();
+
+		if (lastReference == null || lastReference.length == 0){
+// Send generic 'unknown' message as it's very short
+				Message accountUnknownMessage = new GenericUnknownMessage();
+				accountUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(accountUnknownMessage))
+					peer.disconnect("failed to send account-unknown response");
+				return;
+		}
+
+			LastReferenceMessage lastReferenceMessage = new LastReferenceMessage(lastReference);
+			lastReferenceMessage.setId(message.getId());
+
+			if (!peer.sendMessage(lastReferenceMessage)) {
+				peer.disconnect("failed to send account balance");
+			}
+
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while send last reference for account {} to peer {}", address, peer, e);
+		}
+	}
 	private void onNetworkGetChatActiveMessage(Peer peer, Message message) {
 		LOGGER.info("received active chat message");
 		GetActiveChatMessage getActiveChatMessage = (GetActiveChatMessage) message;

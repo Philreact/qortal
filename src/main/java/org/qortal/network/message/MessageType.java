@@ -88,7 +88,11 @@ public enum MessageType {
     ACTIVE_CHAT(210, ActiveChatMessage::fromByteBuffer),
     GET_ACTIVE_CHAT(211, GetActiveChatMessage::fromByteBuffer),
     PROCESS_TRANSACTION_RESPONSE(300, ProcessTransactionResponseMessage::fromByteBuffer),
-    PROCESS_TRANSACTION(301, ProcessTransactionMessage::fromByteBuffer);
+    PROCESS_TRANSACTION(301, ProcessTransactionMessage::fromByteBuffer),
+    LAST_REFERENCE(302, LastReferenceMessage::fromByteBuffer),
+    GET_LAST_REFERENCE(303, GetLastReferenceMessage::fromByteBuffer),
+    UNIT_FEE(304, UnitFeeMessage::fromByteBuffer),
+    GET_UNIT_FEE(305, GetUnitFeeMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 
