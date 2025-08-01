@@ -54,6 +54,7 @@ import org.qortal.account.Account;
 import org.qortal.api.ApiService;
 import org.qortal.api.DomainMapService;
 import org.qortal.api.GatewayService;
+import org.qortal.api.model.NameSummary;
 import org.qortal.api.resource.TransactionsResource;
 import org.qortal.block.Block;
 import org.qortal.block.BlockChain;
@@ -113,6 +114,7 @@ import org.qortal.network.message.GetBlockSummariesMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
 import org.qortal.network.message.GetPeersMessage;
+import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
@@ -121,6 +123,7 @@ import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.NamesMessage;
+import org.qortal.network.message.PrimaryNameMessage;
 import org.qortal.network.message.ProcessTransactionMessage;
 import org.qortal.network.message.ProcessTransactionResponseMessage;
 import org.qortal.network.message.SignaturesMessage;
@@ -1631,6 +1634,9 @@ public class Controller extends Thread {
 			case GET_LAST_REFERENCE:
 				onNetworkGetLastReferenceMessage(peer, message);
 				break;
+			case GET_PRIMARY_NAME:
+				onNetworkGetPrimaryNameMessage(peer, message);
+				break;
 
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
@@ -2124,6 +2130,29 @@ public class Controller extends Thread {
 			LOGGER.error("Repository issue while send last reference for account {} to peer {}", address, peer, e);
 		}
 	}
+
+	private void onNetworkGetPrimaryNameMessage(Peer peer, Message message) {
+	GetPrimaryNameMessage getPrimaryNameMessage = (GetPrimaryNameMessage) message;
+	String address = getPrimaryNameMessage.getAddress();
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		Optional<String> primaryName = repository.getNameRepository().getPrimaryName(address);
+
+		String name = primaryName.orElse(null);
+
+		PrimaryNameMessage primaryNameMessage = new PrimaryNameMessage(name, address); // updated constructor
+		primaryNameMessage.setId(message.getId());
+
+		if (!peer.sendMessage(primaryNameMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending primary name for account {} to peer {}", address, peer, e);
+	}
+}
 	private void onNetworkGetChatActiveMessage(Peer peer, Message message) {
 		LOGGER.info("received active chat message");
 		GetActiveChatMessage getActiveChatMessage = (GetActiveChatMessage) message;

@@ -92,7 +92,11 @@ public enum MessageType {
     LAST_REFERENCE(302, LastReferenceMessage::fromByteBuffer),
     GET_LAST_REFERENCE(303, GetLastReferenceMessage::fromByteBuffer),
     UNIT_FEE(304, UnitFeeMessage::fromByteBuffer),
-    GET_UNIT_FEE(305, GetUnitFeeMessage::fromByteBuffer);
+    GET_UNIT_FEE(305, GetUnitFeeMessage::fromByteBuffer),
+
+    PRIMARY_NAME(306, PrimaryNameMessage::fromByteBuffer),
+    GET_PRIMARY_NAME(307, GetPrimaryNameMessage::fromByteBuffer);
+
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 
