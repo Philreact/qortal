@@ -99,7 +99,9 @@ public enum MessageType {
 
     GROUPS(310, GroupsMessage::fromByteBuffer),
     GET_GROUPS(311, GetGroupsMessage::fromByteBuffer),
-    GET_GROUP(312, GetGroupMessage::fromByteBuffer);
+    GET_GROUP(312, GetGroupMessage::fromByteBuffer),
+    GROUP_BANS(313, GroupBansMessage::fromByteBuffer),
+    GET_GROUP_BANS(314, GetGroupBansMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 

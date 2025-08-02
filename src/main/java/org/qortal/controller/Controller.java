@@ -82,6 +82,7 @@ import org.qortal.data.block.BlockData;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.group.GroupBanData;
 import org.qortal.data.group.GroupData;
 import org.qortal.data.naming.NameData;
 import org.qortal.data.network.PeerData;
@@ -112,6 +113,7 @@ import org.qortal.network.message.GetAccountTransactionsMessage;
 import org.qortal.network.message.GetActiveChatMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
+import org.qortal.network.message.GetGroupBansMessage;
 import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
@@ -121,6 +123,7 @@ import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
+import org.qortal.network.message.GroupBansMessage;
 import org.qortal.network.message.GroupsMessage;
 import org.qortal.network.message.HeightV2Message;
 import org.qortal.network.message.LastReferenceMessage;
@@ -1647,6 +1650,9 @@ public class Controller extends Thread {
 			case GET_GROUP:
 				onNetworkGetGroupMessage(peer, message);
 				break;
+			case GET_GROUP_BANS:
+				onNetworkGetGroupBansMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2454,6 +2460,28 @@ public class Controller extends Thread {
 			groupsMessage.setId(message.getId());
 
 			if (!peer.sendMessage(groupsMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+
+	private void onNetworkGetGroupBansMessage(Peer peer, Message message) {
+		GetGroupBansMessage getGroupBansMessage = (GetGroupBansMessage) message;
+		int groupId = getGroupBansMessage.getGroupId();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupBanData> groupBans = repository.getGroupRepository().getGroupBans(groupId);
+			
+
+
+			GroupBansMessage groupBansMessage = new GroupBansMessage(groupBans);
+			groupBansMessage.setId(message.getId());
+
+			if (!peer.sendMessage(groupBansMessage)) {
 				peer.disconnect("failed to send name data");
 			}
 		} catch (DataException e) {
