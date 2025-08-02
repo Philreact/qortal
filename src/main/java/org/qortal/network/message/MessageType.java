@@ -101,7 +101,10 @@ public enum MessageType {
     GET_GROUPS(311, GetGroupsMessage::fromByteBuffer),
     GET_GROUP(312, GetGroupMessage::fromByteBuffer),
     GROUP_BANS(313, GroupBansMessage::fromByteBuffer),
-    GET_GROUP_BANS(314, GetGroupBansMessage::fromByteBuffer);
+    GET_GROUP_BANS(314, GetGroupBansMessage::fromByteBuffer),
+    GROUP_INVITES(315, GroupInvitesMessage::fromByteBuffer),
+    GET_ADDRESS_GROUP_INVITES(316, GetAddressGroupInvitesMessage::fromByteBuffer),
+    GET_GROUP_INVITES(317, GetGroupInvitesMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 

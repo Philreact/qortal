@@ -84,6 +84,7 @@ import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ChatMessage;
 import org.qortal.data.group.GroupBanData;
 import org.qortal.data.group.GroupData;
+import org.qortal.data.group.GroupInviteData;
 import org.qortal.data.naming.NameData;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
@@ -111,9 +112,11 @@ import org.qortal.network.message.GetAccountMessage;
 import org.qortal.network.message.GetAccountNamesMessage;
 import org.qortal.network.message.GetAccountTransactionsMessage;
 import org.qortal.network.message.GetActiveChatMessage;
+import org.qortal.network.message.GetAddressGroupInvitesMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
 import org.qortal.network.message.GetGroupBansMessage;
+import org.qortal.network.message.GetGroupInvitesMessage;
 import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
@@ -124,6 +127,7 @@ import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
 import org.qortal.network.message.GroupBansMessage;
+import org.qortal.network.message.GroupInvitesMessage;
 import org.qortal.network.message.GroupsMessage;
 import org.qortal.network.message.HeightV2Message;
 import org.qortal.network.message.LastReferenceMessage;
@@ -1653,6 +1657,12 @@ public class Controller extends Thread {
 			case GET_GROUP_BANS:
 				onNetworkGetGroupBansMessage(peer, message);
 				break;
+			case GET_ADDRESS_GROUP_INVITES:
+				onNetworkGetAddressGroupInvitesMessage(peer, message);
+				break;
+			case GET_GROUP_INVITES:
+				onNetworkGetGroupInvitesMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2489,7 +2499,48 @@ public class Controller extends Thread {
 		}
 	}
 
+	private void onNetworkGetAddressGroupInvitesMessage(Peer peer, Message message) {
+		GetAddressGroupInvitesMessage getAddressGroupInvitesMessage = (GetAddressGroupInvitesMessage) message;
+		String address = getAddressGroupInvitesMessage.getAddress();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
 
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupInviteData> invites = repository.getGroupRepository().getInvitesByInvitee(address);
+			
+
+
+			GroupInvitesMessage groupInvitesMessage = new GroupInvitesMessage(invites);
+			groupInvitesMessage.setId(message.getId());
+
+			if (!peer.sendMessage(groupInvitesMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+	private void onNetworkGetGroupInvitesMessage(Peer peer, Message message) {
+		GetGroupInvitesMessage getGroupInvitesMessage = (GetGroupInvitesMessage) message;
+		int groupId = getGroupInvitesMessage.getGroupId();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupInviteData> invites = repository.getGroupRepository().getInvitesByGroupId(groupId);
+			
+
+
+			GroupInvitesMessage groupInvitesMessage = new GroupInvitesMessage(invites);
+			groupInvitesMessage.setId(message.getId());
+
+			if (!peer.sendMessage(groupInvitesMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
 	// Utilities
 
 	/** Returns a list of peers that are not misbehaving, and have a recent block. */
