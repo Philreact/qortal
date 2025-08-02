@@ -95,8 +95,11 @@ public enum MessageType {
     GET_UNIT_FEE(305, GetUnitFeeMessage::fromByteBuffer),
 
     PRIMARY_NAME(306, PrimaryNameMessage::fromByteBuffer),
-    GET_PRIMARY_NAME(307, GetPrimaryNameMessage::fromByteBuffer);
+    GET_PRIMARY_NAME(307, GetPrimaryNameMessage::fromByteBuffer),
 
+    GROUPS(310, GroupsMessage::fromByteBuffer),
+    GET_GROUPS(311, GetGroupsMessage::fromByteBuffer),
+    GET_GROUP(312, GetGroupMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 

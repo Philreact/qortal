@@ -82,6 +82,7 @@ import org.qortal.data.block.BlockData;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.group.GroupData;
 import org.qortal.data.naming.NameData;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
@@ -111,6 +112,8 @@ import org.qortal.network.message.GetAccountTransactionsMessage;
 import org.qortal.network.message.GetActiveChatMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
+import org.qortal.network.message.GetGroupMessage;
+import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
 import org.qortal.network.message.GetPeersMessage;
@@ -118,6 +121,7 @@ import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
+import org.qortal.network.message.GroupsMessage;
 import org.qortal.network.message.HeightV2Message;
 import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
@@ -1637,7 +1641,12 @@ public class Controller extends Thread {
 			case GET_PRIMARY_NAME:
 				onNetworkGetPrimaryNameMessage(peer, message);
 				break;
-
+			case GET_GROUPS:
+				onNetworkGetGroupsMessage(peer, message);
+				break;
+			case GET_GROUP:
+				onNetworkGetGroupMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2393,6 +2402,62 @@ public class Controller extends Thread {
 
 		} catch (DataException e) {
 			LOGGER.error(String.format("Repository issue while send name %s to peer %s", name, peer), e);
+		}
+	}
+
+		private void onNetworkGetGroupsMessage(Peer peer, Message message) {
+		GetGroupsMessage getGroupsMessage = (GetGroupsMessage) message;
+		Boolean reverse = getGroupsMessage.isReverse();
+		int limit = getGroupsMessage.getLimit();
+		int offset = getGroupsMessage.getOffset();
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupData> allGroupData = repository.getGroupRepository().getAllGroups(limit, offset, reverse);
+			allGroupData.forEach(groupData -> {
+				try {
+					groupData.memberCount = repository.getGroupRepository().countGroupMembers(groupData.getGroupId());
+				} catch (DataException e) {
+					// Exclude memberCount for this group
+				}
+			});
+			GroupsMessage groupsMessage = new GroupsMessage(allGroupData);
+			groupsMessage.setId(message.getId());
+
+			if (!peer.sendMessage(groupsMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+		private void onNetworkGetGroupMessage(Peer peer, Message message) {
+		GetGroupMessage getGroupMessage = (GetGroupMessage) message;
+		int groupId = getGroupMessage.getGroupId();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			GroupData groupData = repository.getGroupRepository().fromGroupId(groupId);
+			if (groupData == null){
+				Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+			}
+				
+
+			groupData.memberCount = repository.getGroupRepository().countGroupMembers(groupId);
+
+			GroupsMessage groupsMessage = new GroupsMessage(Arrays.asList(groupData));
+			groupsMessage.setId(message.getId());
+
+			if (!peer.sendMessage(groupsMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
 		}
 	}
 
