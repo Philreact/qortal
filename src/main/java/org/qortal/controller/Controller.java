@@ -128,6 +128,7 @@ import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
+import org.qortal.network.message.GetNamesMessage;
 import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
@@ -1685,6 +1686,9 @@ public class Controller extends Thread {
 			case GET_OWNER_GROUPS:
 				onNetworkGetOwnerGroupsMessage(peer, message);
 				break;
+			case GET_NAMES:
+				onNetworkGetNamesMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2693,6 +2697,35 @@ public class Controller extends Thread {
 			LOGGER.error("Repository issue while sending groups", e);
 		}
 	}
+
+		private void onNetworkGetNamesMessage(Peer peer, Message message) {
+	GetNamesMessage getNamesMessage = (GetNamesMessage) message;
+	Long after = getNamesMessage.getAfter();
+	int limit = getNamesMessage.getLimit();
+	int offset = getNamesMessage.getOffset();
+	boolean reverse = getNamesMessage.isReverse();
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		if (limit <= 0 || limit > 100) {
+		Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+	}
+		 List<NameData> names = repository.getNameRepository().getAllNames(after, limit, offset, reverse);
+		NamesMessage namesMessage = new NamesMessage(names); // updated constructor
+		namesMessage.setId(message.getId());
+
+		if (!peer.sendMessage(namesMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
 
 	// Utilities
 
