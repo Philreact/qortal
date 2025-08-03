@@ -128,10 +128,12 @@ import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
+import org.qortal.network.message.GetNamesForSaleMessage;
 import org.qortal.network.message.GetNamesMessage;
 import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
+import org.qortal.network.message.GetSearchNamesMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
@@ -1689,6 +1691,12 @@ public class Controller extends Thread {
 			case GET_NAMES:
 				onNetworkGetNamesMessage(peer, message);
 				break;
+			case GET_NAMES_FOR_SALE:
+				onNetworkGetNamesForSaleMessage(peer, message);
+				break;
+			case GET_SEARCH_NAMES:
+				onNetworkGetSearchNamesMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2715,6 +2723,66 @@ public class Controller extends Thread {
 				return;
 	}
 		 List<NameData> names = repository.getNameRepository().getAllNames(after, limit, offset, reverse);
+		NamesMessage namesMessage = new NamesMessage(names); // updated constructor
+		namesMessage.setId(message.getId());
+
+		if (!peer.sendMessage(namesMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
+
+		private void onNetworkGetNamesForSaleMessage(Peer peer, Message message) {
+	GetNamesForSaleMessage getNamesForSaleMessage = (GetNamesForSaleMessage) message;
+	int limit = getNamesForSaleMessage.getLimit();
+	int offset = getNamesForSaleMessage.getOffset();
+	boolean reverse = getNamesForSaleMessage.isReverse();
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		if (limit <= 0 || limit > 100) {
+		Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+	}
+		 List<NameData> names = repository.getNameRepository().getNamesForSale(limit, offset, reverse);
+		NamesMessage namesMessage = new NamesMessage(names); // updated constructor
+		namesMessage.setId(message.getId());
+
+		if (!peer.sendMessage(namesMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
+
+	private void onNetworkGetSearchNamesMessage(Peer peer, Message message) {
+	GetSearchNamesMessage getSearchNamesMessage = (GetSearchNamesMessage) message;
+	int limit = getSearchNamesMessage.getLimit();
+	int offset = getSearchNamesMessage.getOffset();
+	boolean reverse = getSearchNamesMessage.isReverse();
+	boolean prefix = getSearchNamesMessage.isPrefix();
+	String query = getSearchNamesMessage.getQuery();
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		if (limit <= 0 || limit > 100) {
+		Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+	}
+	boolean usePrefixOnly = Boolean.TRUE.equals(prefix);
+		 List<NameData> names = repository.getNameRepository().searchNames(query, usePrefixOnly, limit, offset, reverse);
 		NamesMessage namesMessage = new NamesMessage(names); // updated constructor
 		namesMessage.setId(message.getId());
 

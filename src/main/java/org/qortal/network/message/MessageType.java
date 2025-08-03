@@ -78,7 +78,9 @@ public enum MessageType {
     NAMES(180, NamesMessage::fromByteBuffer),
     GET_ACCOUNT_NAMES(181, GetAccountNamesMessage::fromByteBuffer),
     GET_NAME(182, GetNameMessage::fromByteBuffer),
-    GET_NAMES(183, GetNamesMessage::fromByteBuffer),
+    GET_NAMES(184, GetNamesMessage::fromByteBuffer),
+    GET_NAMES_FOR_SALE(186, GetNamesForSaleMessage::fromByteBuffer),
+    GET_SEARCH_NAMES(187, GetSearchNamesMessage::fromByteBuffer),
     TRANSACTIONS(190, TransactionsMessage::fromByteBuffer),
     GET_ACCOUNT_TRANSACTIONS(191, GetAccountTransactionsMessage::fromByteBuffer),
 
