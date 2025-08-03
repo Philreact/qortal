@@ -128,6 +128,7 @@ import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
+import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
@@ -1681,6 +1682,9 @@ public class Controller extends Thread {
 			case GET_GROUP_MEMBERS:
 				onNetworkGetGroupMembersMessage(peer, message);
 				break;
+			case GET_OWNER_GROUPS:
+				onNetworkGetOwnerGroupsMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2670,6 +2674,26 @@ public class Controller extends Thread {
 		}
 
 	}
+
+	private void onNetworkGetOwnerGroupsMessage(Peer peer, Message message) {
+		GetOwnerGroupsMessage getOwnerGroupsMessage = (GetOwnerGroupsMessage) message;
+		String address = getOwnerGroupsMessage.getAddress();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupData> allGroupData = repository.getGroupRepository().getGroupsByOwner(address);
+			
+			GroupsMessage groupInvitesMessage = new GroupsMessage(allGroupData);
+			groupInvitesMessage.setId(message.getId());
+			if (!peer.sendMessage(groupInvitesMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+
 	// Utilities
 
 	/** Returns a list of peers that are not misbehaving, and have a recent block. */

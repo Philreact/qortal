@@ -109,7 +109,9 @@ public enum MessageType {
     GET_GROUP_JOIN_REQUESTS(319, GetGroupJoinRequestsMessage::fromByteBuffer),
     GET_ACCOUNT_GROUPS(320, GetAccountGroupsMessage::fromByteBuffer),
     GROUP_MEMBERS(321, GroupMembersMessage::fromByteBuffer),
-    GET_GROUP_MEMBERS(322, GetGroupMembersMessage::fromByteBuffer);
+    GET_GROUP_MEMBERS(322, GetGroupMembersMessage::fromByteBuffer),
+    GET_OWNER_GROUPS(323, GetOwnerGroupsMessage::fromByteBuffer);
+
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 
