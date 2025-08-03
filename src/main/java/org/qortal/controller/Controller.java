@@ -54,6 +54,7 @@ import org.qortal.account.Account;
 import org.qortal.api.ApiService;
 import org.qortal.api.DomainMapService;
 import org.qortal.api.GatewayService;
+import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.NameSummary;
 import org.qortal.api.resource.TransactionsResource;
 import org.qortal.block.Block;
@@ -82,10 +83,12 @@ import org.qortal.data.block.BlockData;
 import org.qortal.data.block.BlockSummaryData;
 import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.group.GroupAdminData;
 import org.qortal.data.group.GroupBanData;
 import org.qortal.data.group.GroupData;
 import org.qortal.data.group.GroupInviteData;
 import org.qortal.data.group.GroupJoinRequestData;
+import org.qortal.data.group.GroupMemberData;
 import org.qortal.data.naming.NameData;
 import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
@@ -109,6 +112,7 @@ import org.qortal.network.message.CachedBlockMessage;
 import org.qortal.network.message.CachedBlockV2Message;
 import org.qortal.network.message.GenericUnknownMessage;
 import org.qortal.network.message.GetAccountBalanceMessage;
+import org.qortal.network.message.GetAccountGroupsMessage;
 import org.qortal.network.message.GetAccountMessage;
 import org.qortal.network.message.GetAccountNamesMessage;
 import org.qortal.network.message.GetAccountTransactionsMessage;
@@ -119,6 +123,7 @@ import org.qortal.network.message.GetBlockSummariesMessage;
 import org.qortal.network.message.GetGroupBansMessage;
 import org.qortal.network.message.GetGroupInvitesMessage;
 import org.qortal.network.message.GetGroupJoinRequestsMessage;
+import org.qortal.network.message.GetGroupMembersMessage;
 import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
@@ -131,6 +136,7 @@ import org.qortal.network.message.GetUnitFeeMessage;
 import org.qortal.network.message.GroupBansMessage;
 import org.qortal.network.message.GroupInvitesMessage;
 import org.qortal.network.message.GroupJoinRequestsMessage;
+import org.qortal.network.message.GroupMembersMessage;
 import org.qortal.network.message.GroupsMessage;
 import org.qortal.network.message.HeightV2Message;
 import org.qortal.network.message.LastReferenceMessage;
@@ -1669,6 +1675,12 @@ public class Controller extends Thread {
 			case GET_GROUP_JOIN_REQUESTS:
 				onNetworkGetGroupJoinRequestsMessage(peer, message);
 				break;
+			case GET_ACCOUNT_GROUPS:
+				onNetworkGetAccountGroupsMessage(peer, message);
+				break;
+			case GET_GROUP_MEMBERS:
+				onNetworkGetGroupMembersMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2568,6 +2580,95 @@ public class Controller extends Thread {
 		} catch (DataException e) {
 			LOGGER.error("Repository issue while sending groups", e);
 		}
+	}
+
+	private void onNetworkGetAccountGroupsMessage(Peer peer, Message message) {
+		GetAccountGroupsMessage getAccountGroupsMessage = (GetAccountGroupsMessage) message;
+		String address = getAccountGroupsMessage.getAddress();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupData> allGroupData = repository.getGroupRepository().getGroupsWithMember(address);
+			allGroupData.forEach(groupData -> {
+				try {
+					groupData.memberCount = repository.getGroupRepository().countGroupMembers(groupData.getGroupId());
+				} catch (DataException e) {
+					// Exclude memberCount for this group
+				}
+			});
+			GroupsMessage groupInvitesMessage = new GroupsMessage(allGroupData);
+			groupInvitesMessage.setId(message.getId());
+			if (!peer.sendMessage(groupInvitesMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+
+	private void onNetworkGetGroupMembersMessage(Peer peer, Message message) {
+		GetGroupMembersMessage getGroupMembersMessage = (GetGroupMembersMessage) message;
+		int groupId = getGroupMembersMessage.getGroupId();
+		boolean onlyAdmins = getGroupMembersMessage.isOnlyAdmins();
+		int limit = getGroupMembersMessage.getLimit();
+		int offset = getGroupMembersMessage.getOffset();
+		boolean reverse = getGroupMembersMessage.isReverse();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		
+
+
+			try (final Repository repository = RepositoryManager.getRepository()) {
+			if (!repository.getGroupRepository().groupExists(groupId)){
+				Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+			}
+				
+
+			int adminCount = repository.getGroupRepository().countGroupAdmins(groupId);
+			int memberCount = repository.getGroupRepository().countGroupMembers(groupId);
+
+			if (onlyAdmins) {
+				// Shortcut
+				List<GroupAdminData> admins = repository.getGroupRepository().getGroupAdmins(groupId, limit, offset, reverse);
+
+				// Convert form
+				List<GroupMembers.MemberInfo> membersInfo = admins.stream().map(admin -> new GroupMembers.MemberInfo(admin.getAdmin(), null, true)).collect(Collectors.toList());
+
+				GroupMembers groupMembers = new GroupMembers(membersInfo, memberCount, adminCount);
+				GroupMembersMessage groupMembersMessage = new GroupMembersMessage(groupMembers);
+			groupMembersMessage.setId(message.getId());
+			if (!peer.sendMessage(groupMembersMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+			
+			} else {
+	final List<GroupAdminData> admins = repository.getGroupRepository().getGroupAdmins(groupId, limit, offset, reverse);
+
+			List<GroupMemberData> members = repository.getGroupRepository().getGroupMembers(groupId, limit, offset, reverse);
+
+			// Convert form
+			Predicate<GroupMemberData> memberIsAdmin = member -> admins.stream().anyMatch(admin -> admin.getAdmin().equals(member.getMember()));
+			List<GroupMembers.MemberInfo> membersInfo = members.stream().map(member -> new GroupMembers.MemberInfo(member.getMember(), member.getJoined(), memberIsAdmin.test(member))).collect(Collectors.toList());
+
+			
+			GroupMembers groupMembers = new GroupMembers(membersInfo, memberCount, adminCount);
+			GroupMembersMessage groupMembersMessage = new GroupMembersMessage(groupMembers);
+			groupMembersMessage.setId(message.getId());
+			if (!peer.sendMessage(groupMembersMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+			}
+
+		
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+
 	}
 	// Utilities
 

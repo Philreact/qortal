@@ -8,12 +8,11 @@ import javax.xml.bind.annotation.XmlElement;
 import java.util.List;
 
 @Schema(description = "Group info, maybe including members")
-// All properties to be converted to JSON via JAX-RS
 @XmlAccessorType(XmlAccessType.FIELD)
 public class GroupMembers {
 
-	Integer memberCount;
-	Integer adminCount;
+	private Integer memberCount;
+	private Integer adminCount;
 
 	@XmlAccessorType(XmlAccessType.FIELD)
 	@Schema(description = "Member info")
@@ -34,7 +33,7 @@ public class GroupMembers {
 	}
 
 	@XmlElement(name = "members")
-	public List<MemberInfo> groupMembers;
+	private List<MemberInfo> groupMembers;
 
 	// For JAX-RS
 	protected GroupMembers() {
@@ -46,4 +45,16 @@ public class GroupMembers {
 		this.adminCount = adminCount;
 	}
 
+	// ✅ Add these public getters
+	public Integer getMemberCount() {
+		return this.memberCount;
+	}
+
+	public Integer getAdminCount() {
+		return this.adminCount;
+	}
+
+	public List<MemberInfo> getGroupMembers() {
+		return this.groupMembers;
+	}
 }

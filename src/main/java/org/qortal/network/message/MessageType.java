@@ -106,7 +106,10 @@ public enum MessageType {
     GET_ADDRESS_GROUP_INVITES(316, GetAddressGroupInvitesMessage::fromByteBuffer),
     GET_GROUP_INVITES(317, GetGroupInvitesMessage::fromByteBuffer),
     GROUP_JOIN_REQUESTS(318, GroupJoinRequestsMessage::fromByteBuffer),
-    GET_GROUP_JOIN_REQUESTS(319, GetGroupJoinRequestsMessage::fromByteBuffer);
+    GET_GROUP_JOIN_REQUESTS(319, GetGroupJoinRequestsMessage::fromByteBuffer),
+    GET_ACCOUNT_GROUPS(320, GetAccountGroupsMessage::fromByteBuffer),
+    GROUP_MEMBERS(321, GroupMembersMessage::fromByteBuffer),
+    GET_GROUP_MEMBERS(322, GetGroupMembersMessage::fromByteBuffer);
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 
