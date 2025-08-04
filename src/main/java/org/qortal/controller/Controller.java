@@ -133,6 +133,7 @@ import org.qortal.network.message.GetNamesMessage;
 import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
+import org.qortal.network.message.GetPublicKeyFromAddressMessage;
 import org.qortal.network.message.GetSearchNamesMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
@@ -150,6 +151,7 @@ import org.qortal.network.message.NamesMessage;
 import org.qortal.network.message.PrimaryNameMessage;
 import org.qortal.network.message.ProcessTransactionMessage;
 import org.qortal.network.message.ProcessTransactionResponseMessage;
+import org.qortal.network.message.PublicKeyMessage;
 import org.qortal.network.message.SignaturesMessage;
 import org.qortal.network.message.TransactionSignaturesMessage;
 import org.qortal.network.message.TransactionsMessage;
@@ -1697,6 +1699,9 @@ public class Controller extends Thread {
 			case GET_SEARCH_NAMES:
 				onNetworkGetSearchNamesMessage(peer, message);
 				break;
+			case GET_PUBLIC_KEY_FROM_ADDRESS:
+				onNetworkGetGetPublicKeyFromAddressMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2794,6 +2799,48 @@ public class Controller extends Thread {
 		LOGGER.error("Repository issue while sending names", e);
 	}
 }
+
+	private void onNetworkGetGetPublicKeyFromAddressMessage(Peer peer, Message message) {
+		GetPublicKeyFromAddressMessage getPublicKeyFromAddressMessage = (GetPublicKeyFromAddressMessage) message;
+		String address = getPublicKeyFromAddressMessage.getAddress();
+		
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			AccountData accountData = repository.getAccountRepository().getAccount(address);
+
+			if (accountData == null){
+
+				Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+			}
+				
+
+			byte[] publicKey = accountData.getPublicKey();
+			if (publicKey == null){
+
+				Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+			}
+				
+
+			
+			
+			PublicKeyMessage publicKeyMessage = new PublicKeyMessage(publicKey);
+			publicKeyMessage.setId(message.getId());
+			if (!peer.sendMessage(publicKeyMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
 
 	// Utilities
 
