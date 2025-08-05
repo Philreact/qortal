@@ -110,6 +110,7 @@ import org.qortal.network.message.BlockSummariesV2Message;
 import org.qortal.network.message.BlockV2Message;
 import org.qortal.network.message.CachedBlockMessage;
 import org.qortal.network.message.CachedBlockV2Message;
+import org.qortal.network.message.ChatMessagesMessage;
 import org.qortal.network.message.GenericUnknownMessage;
 import org.qortal.network.message.GetAccountBalanceMessage;
 import org.qortal.network.message.GetAccountGroupsMessage;
@@ -120,6 +121,7 @@ import org.qortal.network.message.GetActiveChatMessage;
 import org.qortal.network.message.GetAddressGroupInvitesMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
+import org.qortal.network.message.GetChatsMessage;
 import org.qortal.network.message.GetGroupBansMessage;
 import org.qortal.network.message.GetGroupInvitesMessage;
 import org.qortal.network.message.GetGroupJoinRequestsMessage;
@@ -1702,6 +1704,9 @@ public class Controller extends Thread {
 			case GET_PUBLIC_KEY_FROM_ADDRESS:
 				onNetworkGetGetPublicKeyFromAddressMessage(peer, message);
 				break;
+			case GET_CHAT_MESSAGES:
+				onNetworkGetChatsMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2835,6 +2840,49 @@ public class Controller extends Thread {
 			PublicKeyMessage publicKeyMessage = new PublicKeyMessage(publicKey);
 			publicKeyMessage.setId(message.getId());
 			if (!peer.sendMessage(publicKeyMessage)) {
+				peer.disconnect("failed to send name data");
+			}
+		} catch (DataException e) {
+			LOGGER.error("Repository issue while sending groups", e);
+		}
+	}
+
+	private void onNetworkGetChatsMessage(Peer peer, Message message) {
+		GetChatsMessage getChatsMessage = (GetChatsMessage) message;
+		String sender = getChatsMessage.getSender();
+		Long before = getChatsMessage.getBefore();
+		Long after = getChatsMessage.getAfter();
+		Integer txGroupId = getChatsMessage.getTxGroupId();
+		byte[] referenceBytes = getChatsMessage.getReference();
+		byte[] chatReferenceBytes = getChatsMessage.getChatReference();
+		boolean hasChatReference = (chatReferenceBytes != null);
+		List<String> involvingAddresses = getChatsMessage.getInvolving();
+		ChatMessage.Encoding encoding = getChatsMessage.getEncoding();
+		int limit = getChatsMessage.getLimit();
+		int offset = getChatsMessage.getOffset();
+		boolean reverse = getChatsMessage.isReverse();
+
+		this.stats.getNameMessageStats.requests.incrementAndGet();
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<ChatMessage> messages = repository.getChatRepository().getMessagesMatchingCriteria(
+					before,
+					after,
+					txGroupId,
+					referenceBytes,
+					chatReferenceBytes,
+					hasChatReference,
+					involvingAddresses,
+					sender,
+					encoding,
+					limit, offset, reverse);
+
+		
+			
+			
+			ChatMessagesMessage chatMessages = new ChatMessagesMessage(messages, encoding);
+			chatMessages.setId(message.getId());
+			if (!peer.sendMessage(chatMessages)) {
 				peer.disconnect("failed to send name data");
 			}
 		} catch (DataException e) {

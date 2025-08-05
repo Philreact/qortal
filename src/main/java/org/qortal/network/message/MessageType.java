@@ -89,6 +89,8 @@ public enum MessageType {
 
     ACTIVE_CHAT(210, ActiveChatMessage::fromByteBuffer),
     GET_ACTIVE_CHAT(211, GetActiveChatMessage::fromByteBuffer),
+    CHAT_MESSAGES(212, ChatMessagesMessage::fromByteBuffer),
+    GET_CHAT_MESSAGES(213, GetChatsMessage::fromByteBuffer),
     PROCESS_TRANSACTION_RESPONSE(300, ProcessTransactionResponseMessage::fromByteBuffer),
     PROCESS_TRANSACTION(301, ProcessTransactionMessage::fromByteBuffer),
     LAST_REFERENCE(302, LastReferenceMessage::fromByteBuffer),
@@ -115,6 +117,7 @@ public enum MessageType {
     GET_OWNER_GROUPS(323, GetOwnerGroupsMessage::fromByteBuffer),
     PUBLIC_KEY(324, PublicKeyMessage::fromByteBuffer),
     GET_PUBLIC_KEY_FROM_ADDRESS(325, GetPublicKeyFromAddressMessage::fromByteBuffer);
+
     public final int value;
     public final MessageProducer fromByteBufferMethod;
 
