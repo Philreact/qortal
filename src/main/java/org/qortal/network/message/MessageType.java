@@ -118,7 +118,10 @@ public enum MessageType {
     PUBLIC_KEY(324, PublicKeyMessage::fromByteBuffer),
     GET_PUBLIC_KEY_FROM_ADDRESS(325, GetPublicKeyFromAddressMessage::fromByteBuffer),
     POLLS(326, PollsMessage::fromByteBuffer),
-    GET_POLLS(327, GetPollsMessage::fromByteBuffer);
+    GET_POLLS(327, GetPollsMessage::fromByteBuffer),
+    GET_POLL(328, GetPollMessage::fromByteBuffer),
+    POLL_VOTES(329, PollVotesMessage::fromByteBuffer),
+    GET_POLL_VOTES(330, GetPollVotesMessage::fromByteBuffer);
 
     public final int value;
     public final MessageProducer fromByteBufferMethod;

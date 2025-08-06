@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
@@ -56,6 +57,7 @@ import org.qortal.api.DomainMapService;
 import org.qortal.api.GatewayService;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.NameSummary;
+import org.qortal.api.model.PollVotes;
 import org.qortal.api.resource.TransactionsResource;
 import org.qortal.block.Block;
 import org.qortal.block.BlockChain;
@@ -95,6 +97,8 @@ import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.data.voting.PollData;
+import org.qortal.data.voting.PollOptionData;
+import org.qortal.data.voting.VoteOnPollData;
 import org.qortal.event.Event;
 import org.qortal.event.EventBus;
 import org.qortal.globalization.Translator;
@@ -135,6 +139,8 @@ import org.qortal.network.message.GetNamesForSaleMessage;
 import org.qortal.network.message.GetNamesMessage;
 import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
+import org.qortal.network.message.GetPollMessage;
+import org.qortal.network.message.GetPollVotesMessage;
 import org.qortal.network.message.GetPollsMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetPublicKeyFromAddressMessage;
@@ -152,6 +158,7 @@ import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.NamesMessage;
+import org.qortal.network.message.PollVotesMessage;
 import org.qortal.network.message.PollsMessage;
 import org.qortal.network.message.PrimaryNameMessage;
 import org.qortal.network.message.ProcessTransactionMessage;
@@ -1713,6 +1720,12 @@ public class Controller extends Thread {
 			case GET_POLLS:
 				onNetworkGetPollsMessage(peer, message);
 				break;
+			case GET_POLL:
+				onNetworkGetPollMessage(peer, message);
+				break;
+			case GET_POLL_VOTES:
+				onNetworkGetPollVotesMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2916,6 +2929,116 @@ private void onNetworkGetPollsMessage(Peer peer, Message message) {
 		pollMessage.setId(message.getId());
 
 		if (!peer.sendMessage(pollMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
+
+private void onNetworkGetPollMessage(Peer peer, Message message) {
+	GetPollMessage getPollMessage = (GetPollMessage) message;
+	String pollName = getPollMessage.getPollName();
+	
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		
+		  PollData pollData = repository.getVotingRepository().fromPollName(pollName);
+        if (pollData == null){
+			Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+
+		}
+		PollsMessage pollMessage = new PollsMessage(Arrays.asList(pollData)); // updated constructor
+		pollMessage.setId(message.getId());
+
+		if (!peer.sendMessage(pollMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
+
+private void onNetworkGetPollVotesMessage(Peer peer, Message message) {
+	GetPollVotesMessage getPollVotesMessage = (GetPollVotesMessage) message;
+	String pollName = getPollVotesMessage.getPollName();
+	boolean onlyCounts = getPollVotesMessage.isOnlyCounts();
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		
+		  PollData pollData = repository.getVotingRepository().fromPollName(pollName);
+        if (pollData == null){
+			Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+
+		}
+
+
+
+                    List<VoteOnPollData> votes = repository.getVotingRepository().getVotes(pollName);
+
+                    // Initialize map for counting votes
+                    Map<String, Integer> voteCountMap = new HashMap<>();
+                    for (PollOptionData optionData : pollData.getPollOptions()) {
+                            voteCountMap.put(optionData.getOptionName(), 0);
+                    }
+                    // Initialize map for counting vote weights
+                    Map<String, Integer> voteWeightMap = new HashMap<>();
+                    for (PollOptionData optionData : pollData.getPollOptions()) {
+                            voteWeightMap.put(optionData.getOptionName(), 0);
+                    }
+
+                    int totalVotes = 0;
+                    int totalWeight = 0;
+                    for (VoteOnPollData vote : votes) {
+                            String voter = Crypto.toAddress(vote.getVoterPublicKey());
+                            AccountData voterData = repository.getAccountRepository().getAccount(voter);
+                            int voteWeight = voterData.getBlocksMinted() + voterData.getBlocksMintedPenalty();
+                            if (voteWeight < 0) voteWeight = 0;
+                            totalWeight += voteWeight;
+
+                            String selectedOption = pollData.getPollOptions().get(vote.getOptionIndex()).getOptionName();
+                            if (voteCountMap.containsKey(selectedOption)) {
+                                    voteCountMap.put(selectedOption, voteCountMap.get(selectedOption) + 1);
+                                    voteWeightMap.put(selectedOption, voteWeightMap.get(selectedOption) + voteWeight);
+                                    totalVotes++;
+                            }
+                    }
+
+                    // Convert map to list of VoteInfo
+                    List<PollVotes.OptionCount> voteCounts = voteCountMap.entrySet().stream()
+                        .map(entry -> new PollVotes.OptionCount(entry.getKey(), entry.getValue()))
+                        .collect(Collectors.toList());
+                    // Convert map to list of WeightInfo
+                    List<PollVotes.OptionWeight> voteWeights = voteWeightMap.entrySet().stream()
+                        .map(entry -> new PollVotes.OptionWeight(entry.getKey(), entry.getValue()))
+                        .collect(Collectors.toList());
+					PollVotes pollVotes;
+                    if (onlyCounts) {
+                        pollVotes = new PollVotes(null, totalVotes, totalWeight, voteCounts, voteWeights);
+                    } else {
+                        pollVotes = new PollVotes(votes, totalVotes, totalWeight, voteCounts, voteWeights);
+                    }
+
+
+
+		
+		PollVotesMessage pollVotesMessage = new PollVotesMessage(pollVotes); // updated constructor
+		pollVotesMessage.setId(message.getId());
+
+		if (!peer.sendMessage(pollVotesMessage)) {
 			peer.disconnect("failed to send primary name message");
 		}
 
