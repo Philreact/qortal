@@ -116,7 +116,9 @@ public enum MessageType {
     GET_GROUP_MEMBERS(322, GetGroupMembersMessage::fromByteBuffer),
     GET_OWNER_GROUPS(323, GetOwnerGroupsMessage::fromByteBuffer),
     PUBLIC_KEY(324, PublicKeyMessage::fromByteBuffer),
-    GET_PUBLIC_KEY_FROM_ADDRESS(325, GetPublicKeyFromAddressMessage::fromByteBuffer);
+    GET_PUBLIC_KEY_FROM_ADDRESS(325, GetPublicKeyFromAddressMessage::fromByteBuffer),
+    POLLS(326, PollsMessage::fromByteBuffer),
+    GET_POLLS(327, GetPollsMessage::fromByteBuffer);
 
     public final int value;
     public final MessageProducer fromByteBufferMethod;

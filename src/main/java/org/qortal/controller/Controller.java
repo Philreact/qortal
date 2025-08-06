@@ -94,6 +94,7 @@ import org.qortal.data.network.PeerData;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.data.transaction.TransactionData;
+import org.qortal.data.voting.PollData;
 import org.qortal.event.Event;
 import org.qortal.event.EventBus;
 import org.qortal.globalization.Translator;
@@ -134,6 +135,7 @@ import org.qortal.network.message.GetNamesForSaleMessage;
 import org.qortal.network.message.GetNamesMessage;
 import org.qortal.network.message.GetOwnerGroupsMessage;
 import org.qortal.network.message.GetPeersMessage;
+import org.qortal.network.message.GetPollsMessage;
 import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetPublicKeyFromAddressMessage;
 import org.qortal.network.message.GetSearchNamesMessage;
@@ -150,6 +152,7 @@ import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
 import org.qortal.network.message.NamesMessage;
+import org.qortal.network.message.PollsMessage;
 import org.qortal.network.message.PrimaryNameMessage;
 import org.qortal.network.message.ProcessTransactionMessage;
 import org.qortal.network.message.ProcessTransactionResponseMessage;
@@ -1707,6 +1710,9 @@ public class Controller extends Thread {
 			case GET_CHAT_MESSAGES:
 				onNetworkGetChatsMessage(peer, message);
 				break;
+			case GET_POLLS:
+				onNetworkGetPollsMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -2889,6 +2895,34 @@ public class Controller extends Thread {
 			LOGGER.error("Repository issue while sending groups", e);
 		}
 	}
+
+private void onNetworkGetPollsMessage(Peer peer, Message message) {
+	GetPollsMessage getPollsMessage = (GetPollsMessage) message;
+	int limit = getPollsMessage.getLimit();
+	int offset = getPollsMessage.getOffset();
+	boolean reverse = getPollsMessage.isReverse();
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		if (limit <= 0 || limit > 100) {
+		Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+	}
+		List<PollData> allPollData = repository.getVotingRepository().getAllPolls(limit, offset, reverse);
+		PollsMessage pollMessage = new PollsMessage(allPollData); // updated constructor
+		pollMessage.setId(message.getId());
+
+		if (!peer.sendMessage(pollMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
 
 	// Utilities
 
