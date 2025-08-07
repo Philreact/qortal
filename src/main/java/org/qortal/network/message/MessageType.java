@@ -60,7 +60,8 @@ public enum MessageType {
 
     ARBITRARY_DATA_FILE_LIST(120, ArbitraryDataFileListMessage::fromByteBuffer),
     GET_ARBITRARY_DATA_FILE_LIST(121, GetArbitraryDataFileListMessage::fromByteBuffer),
-
+    ARBITRARY_LATEST_TRANSACTION(122, ArbitraryLatestTransactionMessage::fromByteBuffer),
+    GET_ARBITRARY_LATEST_TRANSACTION(123, GetArbitraryLatestTransactionMessage::fromByteBuffer),
     ARBITRARY_SIGNATURES(130, ArbitrarySignaturesMessage::fromByteBuffer),
 
     TRADE_PRESENCES(140, TradePresencesMessage::fromByteBuffer),

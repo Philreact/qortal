@@ -59,6 +59,7 @@ import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.NameSummary;
 import org.qortal.api.model.PollVotes;
 import org.qortal.api.resource.TransactionsResource;
+import org.qortal.arbitrary.misc.Service;
 import org.qortal.block.Block;
 import org.qortal.block.BlockChain;
 import org.qortal.block.BlockChain.BlockTimingByHeight;
@@ -110,6 +111,7 @@ import org.qortal.network.PeerAddress;
 import org.qortal.network.message.AccountBalanceMessage;
 import org.qortal.network.message.AccountMessage;
 import org.qortal.network.message.ActiveChatMessage;
+import org.qortal.network.message.ArbitraryLatestTransactionMessage;
 import org.qortal.network.message.BlockSummariesMessage;
 import org.qortal.network.message.BlockSummariesV2Message;
 import org.qortal.network.message.BlockV2Message;
@@ -124,6 +126,7 @@ import org.qortal.network.message.GetAccountNamesMessage;
 import org.qortal.network.message.GetAccountTransactionsMessage;
 import org.qortal.network.message.GetActiveChatMessage;
 import org.qortal.network.message.GetAddressGroupInvitesMessage;
+import org.qortal.network.message.GetArbitraryLatestTransactionMessage;
 import org.qortal.network.message.GetBlockMessage;
 import org.qortal.network.message.GetBlockSummariesMessage;
 import org.qortal.network.message.GetChatsMessage;
@@ -1736,6 +1739,9 @@ public class Controller extends Thread {
 			case GET_LAST_BLOCK_HEIGHT:
 				onNetworkGetLastBlockHeightMessage(peer, message);
 				break;
+			case GET_ARBITRARY_LATEST_TRANSACTION:
+				onNetworkGetArbitraryLatestTransactionMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -3087,6 +3093,43 @@ private void onNetworkGetLastBlockHeightMessage(Peer peer, Message message) {
 	}
 }
 
+private void onNetworkGetArbitraryLatestTransactionMessage(Peer peer, Message message) {
+	GetArbitraryLatestTransactionMessage getArbitraryLatestTransactionMessage = (GetArbitraryLatestTransactionMessage) message;
+	int serviceInt = getArbitraryLatestTransactionMessage.getService();
+	Service service = Service.valueOf(serviceInt);
+	String name = getArbitraryLatestTransactionMessage.getName();
+	String identifier = getArbitraryLatestTransactionMessage.getIdentifier();
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet();
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+
+		ArbitraryTransactionData latestTransaction = repository.getArbitraryRepository()
+                    .getLatestTransaction(name, service, null, identifier);
+
+		 byte[] signature = null;
+           if (latestTransaction != null) {
+                signature =  latestTransaction.getSignature();
+            }
+
+			if(signature == null){
+				Message nameUnknownMessage = new GenericUnknownMessage();
+				nameUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(nameUnknownMessage))
+					peer.disconnect("failed to send name-unknown response");
+				return;
+			}
+
+		ArbitraryLatestTransactionMessage arbitraryLatestTransactionMessage = new ArbitraryLatestTransactionMessage(signature);
+		arbitraryLatestTransactionMessage.setId(message.getId());
+
+		if (!peer.sendMessage(arbitraryLatestTransactionMessage)) {
+			peer.disconnect("failed to send last block height message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending last block height message", e);
+	}
+}
 
 
 private void onNetworkGetSupplyMessage(Peer peer, Message message) {
