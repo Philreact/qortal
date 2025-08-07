@@ -18,6 +18,7 @@ public class GetChatsMessage extends Message {
 	private byte[] reference;
 	private Long before;
 	private Long after;
+	private Boolean hasChatReference; // tri-state
 	private byte[] chatReference;
 	private String sender;
 	private int offset;
@@ -28,7 +29,7 @@ public class GetChatsMessage extends Message {
 	private static final int SIGNATURE_LENGTH = Transformer.SIGNATURE_LENGTH;
 
 	public GetChatsMessage(Integer txGroupId, List<String> involving, Encoding encoding, byte[] reference, Long before, Long after,
-	                       byte[] chatReference, String sender, int offset, int limit, boolean reverse) {
+	                       Boolean hasChatReference, byte[] chatReference, String sender, int offset, int limit, boolean reverse) {
 		super(MessageType.GET_CHAT_MESSAGES);
 
 		this.txGroupId = txGroupId;
@@ -37,6 +38,7 @@ public class GetChatsMessage extends Message {
 		this.reference = reference;
 		this.before = before;
 		this.after = after;
+		this.hasChatReference = hasChatReference;
 		this.chatReference = chatReference;
 		this.sender = sender;
 		this.offset = offset;
@@ -82,12 +84,18 @@ public class GetChatsMessage extends Message {
 				bytes.write(intToBytes(0));
 			}
 
-			// chatReference (nullable)
-			if (chatReference != null) {
+			// hasChatReference (tri-state)
+			if (hasChatReference == Boolean.TRUE) {
 				bytes.write(intToBytes(1));
-				bytes.write(chatReference);
-			} else {
+				if (chatReference != null) {
+					bytes.write(chatReference);
+				} else {
+					bytes.write(new byte[SIGNATURE_LENGTH]); // empty bytes
+				}
+			} else if (hasChatReference == Boolean.FALSE) {
 				bytes.write(intToBytes(0));
+			} else {
+				bytes.write(intToBytes(-1));
 			}
 
 			// sender (nullable)
@@ -111,7 +119,7 @@ public class GetChatsMessage extends Message {
 	}
 
 	private GetChatsMessage(int id, Integer txGroupId, List<String> involving, Encoding encoding, byte[] reference, Long before, Long after,
-	                        byte[] chatReference, String sender, int offset, int limit, boolean reverse) {
+	                        Boolean hasChatReference, byte[] chatReference, String sender, int offset, int limit, boolean reverse) {
 		super(id, MessageType.GET_CHAT_MESSAGES);
 
 		this.txGroupId = txGroupId;
@@ -120,6 +128,7 @@ public class GetChatsMessage extends Message {
 		this.reference = reference;
 		this.before = before;
 		this.after = after;
+		this.hasChatReference = hasChatReference;
 		this.chatReference = chatReference;
 		this.sender = sender;
 		this.offset = offset;
@@ -164,11 +173,18 @@ public class GetChatsMessage extends Message {
 			after = buffer.getLong();
 		}
 
-		// chatReference (nullable)
+		// hasChatReference (tri-state)
+		Boolean hasChatReference = null;
 		byte[] chatReference = null;
-		if (buffer.getInt() == 1) {
+		int hasChatRefFlag = buffer.getInt();
+		if (hasChatRefFlag == 1) {
+			hasChatReference = Boolean.TRUE;
 			chatReference = new byte[SIGNATURE_LENGTH];
 			buffer.get(chatReference);
+		} else if (hasChatRefFlag == 0) {
+			hasChatReference = Boolean.FALSE;
+		} else {
+			hasChatReference = null;
 		}
 
 		// sender (nullable)
@@ -184,7 +200,7 @@ public class GetChatsMessage extends Message {
 		int limit = buffer.getInt();
 		boolean reverse = buffer.getInt() == 1;
 
-		return new GetChatsMessage(id, txGroupId, involving, encoding, reference, before, after, chatReference, sender, offset, limit, reverse);
+		return new GetChatsMessage(id, txGroupId, involving, encoding, reference, before, after, hasChatReference, chatReference, sender, offset, limit, reverse);
 	}
 
 	private byte[] intToBytes(int value) {
@@ -195,13 +211,14 @@ public class GetChatsMessage extends Message {
 		return ByteBuffer.allocate(8).putLong(value).array();
 	}
 
-	// Getters if needed (optional, could be removed if not used elsewhere)
+	// Getters
 	public Integer getTxGroupId() { return txGroupId; }
 	public List<String> getInvolving() { return involving; }
 	public Encoding getEncoding() { return encoding; }
 	public byte[] getReference() { return reference; }
 	public Long getBefore() { return before; }
 	public Long getAfter() { return after; }
+	public Boolean getHasChatReference() { return hasChatReference; }
 	public byte[] getChatReference() { return chatReference; }
 	public String getSender() { return sender; }
 	public int getOffset() { return offset; }

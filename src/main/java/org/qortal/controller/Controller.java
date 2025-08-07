@@ -2884,7 +2884,7 @@ public class Controller extends Thread {
 		Integer txGroupId = getChatsMessage.getTxGroupId();
 		byte[] referenceBytes = getChatsMessage.getReference();
 		byte[] chatReferenceBytes = getChatsMessage.getChatReference();
-		boolean hasChatReference = (chatReferenceBytes != null);
+		Boolean hasChatReference = getChatsMessage.getHasChatReference();
 		List<String> involvingAddresses = getChatsMessage.getInvolving();
 		ChatMessage.Encoding encoding = getChatsMessage.getEncoding();
 		int limit = getChatsMessage.getLimit();
