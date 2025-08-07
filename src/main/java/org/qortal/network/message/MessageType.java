@@ -42,7 +42,10 @@ public enum MessageType {
     BLOCK_SUMMARIES(70, BlockSummariesMessage::fromByteBuffer),
     GET_BLOCK_SUMMARIES(71, GetBlockSummariesMessage::fromByteBuffer),
     BLOCK_SUMMARIES_V2(72, BlockSummariesV2Message::fromByteBuffer),
-    
+    SUPPLY(73, SupplyMessage::fromByteBuffer),
+    GET_SUPPLY(74, GetSupplyMessage::fromByteBuffer),
+    LAST_BLOCK_HEIGHT(75, LastBlockHeightMessage::fromByteBuffer),
+    GET_LAST_BLOCK_HEIGHT(76, GetLastBlockHeightMessage::fromByteBuffer),
     ONLINE_ACCOUNTS_V3(84, OnlineAccountsV3Message::fromByteBuffer),
     GET_ONLINE_ACCOUNTS_V3(85, GetOnlineAccountsV3Message::fromByteBuffer),
 

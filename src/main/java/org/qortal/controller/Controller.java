@@ -133,6 +133,7 @@ import org.qortal.network.message.GetGroupJoinRequestsMessage;
 import org.qortal.network.message.GetGroupMembersMessage;
 import org.qortal.network.message.GetGroupMessage;
 import org.qortal.network.message.GetGroupsMessage;
+import org.qortal.network.message.GetLastBlockHeightMessage;
 import org.qortal.network.message.GetLastReferenceMessage;
 import org.qortal.network.message.GetNameMessage;
 import org.qortal.network.message.GetNamesForSaleMessage;
@@ -146,6 +147,7 @@ import org.qortal.network.message.GetPrimaryNameMessage;
 import org.qortal.network.message.GetPublicKeyFromAddressMessage;
 import org.qortal.network.message.GetSearchNamesMessage;
 import org.qortal.network.message.GetSignaturesV2Message;
+import org.qortal.network.message.GetSupplyMessage;
 import org.qortal.network.message.GetUnconfirmedTransactionsMessage;
 import org.qortal.network.message.GetUnitFeeMessage;
 import org.qortal.network.message.GroupBansMessage;
@@ -154,6 +156,7 @@ import org.qortal.network.message.GroupJoinRequestsMessage;
 import org.qortal.network.message.GroupMembersMessage;
 import org.qortal.network.message.GroupsMessage;
 import org.qortal.network.message.HeightV2Message;
+import org.qortal.network.message.LastBlockHeightMessage;
 import org.qortal.network.message.LastReferenceMessage;
 import org.qortal.network.message.Message;
 import org.qortal.network.message.MessageException;
@@ -165,6 +168,7 @@ import org.qortal.network.message.ProcessTransactionMessage;
 import org.qortal.network.message.ProcessTransactionResponseMessage;
 import org.qortal.network.message.PublicKeyMessage;
 import org.qortal.network.message.SignaturesMessage;
+import org.qortal.network.message.SupplyMessage;
 import org.qortal.network.message.TransactionSignaturesMessage;
 import org.qortal.network.message.TransactionsMessage;
 import org.qortal.network.message.UnitFeeMessage;
@@ -1726,6 +1730,12 @@ public class Controller extends Thread {
 			case GET_POLL_VOTES:
 				onNetworkGetPollVotesMessage(peer, message);
 				break;
+			case GET_SUPPLY:
+				onNetworkGetSupplyMessage(peer, message);
+				break;
+			case GET_LAST_BLOCK_HEIGHT:
+				onNetworkGetLastBlockHeightMessage(peer, message);
+				break;
 			default:
 				LOGGER.debug(() -> String.format("Unhandled %s message [ID %d] from peer %s", message.getType().name(), message.getId(), peer));
 				break;
@@ -3039,6 +3049,71 @@ private void onNetworkGetPollVotesMessage(Peer peer, Message message) {
 		pollVotesMessage.setId(message.getId());
 
 		if (!peer.sendMessage(pollVotesMessage)) {
+			peer.disconnect("failed to send primary name message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending names", e);
+	}
+}
+
+private void onNetworkGetLastBlockHeightMessage(Peer peer, Message message) {
+	GetLastBlockHeightMessage getLastBlockHeightMessage = (GetLastBlockHeightMessage) message;
+	boolean includeOnlineSignatures = getLastBlockHeightMessage.isIncludeOnlineSignatures();
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet();
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+
+		BlockData blockData = repository.getBlockRepository().getLastBlock();
+
+		if (!includeOnlineSignatures) {
+			blockData.setOnlineAccountsSignatures(null);
+		}
+
+		String minterAddress = blockData.getMinterAddressFromPublicKey();
+		int minterLevel = blockData.getMinterLevelFromPublicKey();
+		
+
+		LastBlockHeightMessage lastBlockHeightMessage = new LastBlockHeightMessage(blockData, minterAddress, minterLevel);
+		lastBlockHeightMessage.setId(message.getId());
+
+		if (!peer.sendMessage(lastBlockHeightMessage)) {
+			peer.disconnect("failed to send last block height message");
+		}
+
+	} catch (DataException e) {
+		LOGGER.error("Repository issue while sending last block height message", e);
+	}
+}
+
+
+
+private void onNetworkGetSupplyMessage(Peer peer, Message message) {
+
+	this.stats.getAccountBalanceMessageStats.requests.incrementAndGet(); // Optional: update stat name
+
+	try (final Repository repository = RepositoryManager.getRepository()) {
+		long total = 0L;
+		int currentHeight = repository.getBlockRepository().getBlockchainHeight();
+
+			List<BlockChain.RewardByHeight> rewardsByHeight = BlockChain.getInstance().getBlockRewardsByHeight();
+			int rewardIndex = rewardsByHeight.size() - 1;
+			BlockChain.RewardByHeight rewardInfo = rewardsByHeight.get(rewardIndex);
+
+			for (int height = currentHeight; height > 1; --height) {
+				if (height < rewardInfo.height) {
+					--rewardIndex;
+					rewardInfo = rewardsByHeight.get(rewardIndex);
+				}
+
+				total += rewardInfo.reward;
+			}
+
+		SupplyMessage supplyMessage = new SupplyMessage(total); // updated constructor
+		supplyMessage.setId(message.getId());
+
+		if (!peer.sendMessage(supplyMessage)) {
 			peer.disconnect("failed to send primary name message");
 		}
 
