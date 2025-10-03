@@ -30,6 +30,7 @@ import org.qortal.arbitrary.misc.Category;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.controller.Controller;
 import org.qortal.controller.arbitrary.ArbitraryDataCacheManager;
+import org.qortal.controller.arbitrary.ArbitraryDataHostMonitor;
 import org.qortal.controller.arbitrary.ArbitraryDataRenderManager;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager;
 import org.qortal.controller.arbitrary.ArbitraryMetadataManager;
@@ -43,6 +44,7 @@ import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.arbitrary.IndexCache;
 import org.qortal.data.naming.NameData;
+import org.qortal.data.transaction.ArbitraryHostedDataItemInfo;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.list.ResourceListManager;
@@ -83,7 +85,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPOutputStream;
 
@@ -94,7 +95,6 @@ import org.apache.tika.mime.MimeTypes;
 import javax.ws.rs.core.Response;
 
 import org.glassfish.jersey.media.multipart.FormDataParam;
-import static org.qortal.api.ApiError.REPOSITORY_ISSUE;
 
 @Path("/arbitrary")
 @Tag(name = "Arbitrary")
@@ -514,25 +514,19 @@ public class ArbitraryResource {
 			summary = "List arbitrary transactions hosted by this node",
 			responses = {
 					@ApiResponse(
-							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ArbitraryTransactionData.class))
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ArbitraryHostedDataItemInfo.class))
 					)
 			}
 	)
 	@ApiErrors({ApiError.REPOSITORY_ISSUE})
-	public List<ArbitraryTransactionData> getHostedTransactions(@HeaderParam(Security.API_KEY_HEADER) String apiKey,
-																@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+	public List<ArbitraryHostedDataItemInfo> getHostedTransactions(@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
 																@Parameter(ref = "offset") @QueryParam("offset") Integer offset) {
-		Security.checkApiCallAllowed(request);
+		List<ArbitraryHostedDataItemInfo> hostedTransactions
+			= ArbitraryDataHostMonitor.getInstance().getHostedDataItemInfos().stream()
+				.sorted(Comparator.comparing(ArbitraryHostedDataItemInfo::getTotalSpace).reversed())
+				.collect(Collectors.toList());
 
-		try (final Repository repository = RepositoryManager.getRepository()) {
-
-			List<ArbitraryTransactionData> hostedTransactions = ArbitraryDataStorageManager.getInstance().listAllHostedTransactions(repository, limit, offset);
-
-			return hostedTransactions;
-
-		} catch (DataException e) {
-			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
-		}
+		return ArbitraryTransactionUtils.limitOffsetTransactions(hostedTransactions, limit, offset);
 	}
 
 	@GET
