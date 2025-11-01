@@ -44,6 +44,7 @@ import org.qortal.data.arbitrary.ArbitraryResourceMetadata;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
 import org.qortal.data.arbitrary.IndexCache;
 import org.qortal.data.naming.NameData;
+import org.qortal.data.transaction.ArbitraryHostedDataInfo;
 import org.qortal.data.transaction.ArbitraryHostedDataItemInfo;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
@@ -86,6 +87,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.GZIPOutputStream;
 
 import org.apache.tika.Tika;
@@ -514,19 +516,33 @@ public class ArbitraryResource {
 			summary = "List arbitrary transactions hosted by this node",
 			responses = {
 					@ApiResponse(
-							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ArbitraryHostedDataItemInfo.class))
+							content = @Content(mediaType = MediaType.APPLICATION_JSON, schema = @Schema(implementation = ArbitraryHostedDataInfo.class))
 					)
 			}
 	)
 	@ApiErrors({ApiError.REPOSITORY_ISSUE})
-	public List<ArbitraryHostedDataItemInfo> getHostedTransactions(@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
-																@Parameter(ref = "offset") @QueryParam("offset") Integer offset) {
+	public ArbitraryHostedDataInfo getHostedTransactions(@Parameter(ref = "limit") @QueryParam("limit") Integer limit,
+																@Parameter(ref = "offset") @QueryParam("offset") Integer offset,
+																   @QueryParam("name") String name) {
+
+		Stream<ArbitraryHostedDataItemInfo> stream = ArbitraryDataHostMonitor.getInstance().getHostedDataItemInfos().stream();
+
+		// if name is set, then filter by name
+		if( name != null && !"".equals(name)) {
+			stream = stream.filter( info -> info.getName().startsWith(name));
+		}
+
+		// always sort from the greatest total space to the least total space
 		List<ArbitraryHostedDataItemInfo> hostedTransactions
-			= ArbitraryDataHostMonitor.getInstance().getHostedDataItemInfos().stream()
-				.sorted(Comparator.comparing(ArbitraryHostedDataItemInfo::getTotalSpace).reversed())
+			= stream.sorted(Comparator.comparing(ArbitraryHostedDataItemInfo::getTotalSpace).reversed())
 				.collect(Collectors.toList());
 
-		return ArbitraryTransactionUtils.limitOffsetTransactions(hostedTransactions, limit, offset);
+		int count = hostedTransactions.size();
+		long totalSpace = hostedTransactions.stream().collect(Collectors.summingLong(ArbitraryHostedDataItemInfo::getTotalSpace));
+
+		List<ArbitraryHostedDataItemInfo> items = ArbitraryTransactionUtils.limitOffsetTransactions(hostedTransactions, limit, offset);
+
+		return new ArbitraryHostedDataInfo(count, totalSpace, items);
 	}
 
 	@GET

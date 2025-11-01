@@ -54,6 +54,9 @@ public class ArbitraryDataHostMonitor extends Thread{
 
     @Override
     public void run() {
+
+        if( !Settings.getInstance().isQdnEnabled() || !Settings.getInstance().isHostMonitorEnabled() ) return;
+
         Thread.currentThread().setName("Arbitrary Data Host Manager");
         Thread.currentThread().setPriority(MIN_PRIORITY);
 

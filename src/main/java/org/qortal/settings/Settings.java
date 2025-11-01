@@ -552,6 +552,14 @@ public class Settings {
 	 */
     private int electrumThreadCount = 12;
 
+	/**
+	 * Host Monitor Enabled
+	 *
+	 * The Host Monitor is a thread that runs in the background. It crawls through the QDN data directory to monitor
+	 * what is in there. If set to false, then it will not run.
+	 */
+    private  boolean hostMonitorEnabled = false;
+
     // Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
@@ -1404,5 +1412,9 @@ public class Settings {
 
 	public int getElectrumThreadCount() {
 		return electrumThreadCount;
+	}
+
+	public boolean isHostMonitorEnabled() {
+		return hostMonitorEnabled;
 	}
 }
