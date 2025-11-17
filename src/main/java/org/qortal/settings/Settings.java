@@ -231,7 +231,7 @@ public class Settings {
 	/** Whether to sync multiple blocks at once when the peer has a different chain */
 	private boolean fastSyncEnabledWhenResolvingFork = true;
 	/** Maximum number of blocks to request at once */
-	private int maxBlocksPerRequest = 100;
+	private int maxBlocksPerRequest = 200;
 	/** Maximum number of blocks this node will serve in a single response */
 	private int maxBlocksPerResponse = 200;
 
@@ -1089,6 +1089,10 @@ public class Settings {
 	public int getMaxBlocksPerRequest() { return this.maxBlocksPerRequest; }
 
 	public int getMaxBlocksPerResponse() { return this.maxBlocksPerResponse; }
+
+	public int getMaxBlocksPerMessage() {
+		return Math.max(1, Math.min(this.maxBlocksPerRequest, this.maxBlocksPerResponse));
+	}
 
 	public boolean isAutoUpdateEnabled() {
 		return this.autoUpdateEnabled;

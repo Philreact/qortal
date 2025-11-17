@@ -50,8 +50,8 @@ public enum MessageType {
     ARBITRARY_DATA(90, ArbitraryDataMessage::fromByteBuffer),
     GET_ARBITRARY_DATA(91, GetArbitraryDataMessage::fromByteBuffer),
 
-    BLOCKS(100, null), // unsupported
-    GET_BLOCKS(101, null), // unsupported
+    BLOCKS(100, BlocksMessage::fromByteBuffer),
+    GET_BLOCKS(101, GetBlocksMessage::fromByteBuffer),
 
     ARBITRARY_DATA_FILE(110, ArbitraryDataFileMessage::fromByteBuffer),
     GET_ARBITRARY_DATA_FILE(111, GetArbitraryDataFileMessage::fromByteBuffer),

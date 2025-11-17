@@ -1449,6 +1449,10 @@ public class Controller extends Thread {
 				onNetworkGetBlockMessage(peer, message);
 				break;
 
+			case GET_BLOCKS:
+				onNetworkGetBlocksMessage(peer, message);
+				break;
+
 			case GET_BLOCK_SUMMARIES:
 				onNetworkGetBlockSummariesMessage(peer, message);
 				break;
@@ -1678,6 +1682,60 @@ public class Controller extends Thread {
 			LOGGER.error(String.format("Repository issue while sending block %s to peer %s", Base58.encode(signature), peer), e);
 		} catch (TransformationException e) {
 			LOGGER.error(String.format("Serialization issue while sending block %s to peer %s", Base58.encode(signature), peer), e);
+		}
+	}
+
+	private void onNetworkGetBlocksMessage(Peer peer, Message message) {
+		if (peer.getPeersVersion() < BlocksMessage.MINIMUM_PEER_VERSION) {
+			LOGGER.debug(() -> String.format("Peer %s requested multiple blocks but is running older version %s", peer, peer.getPeersVersionString()));
+			return;
+		}
+
+		GetBlocksMessage getBlocksMessage = (GetBlocksMessage) message;
+		List<byte[]> requestedSignatures = getBlocksMessage.getSignatures();
+
+		if (requestedSignatures == null || requestedSignatures.isEmpty()) {
+			return;
+		}
+
+		int blocksToAttempt = Math.min(Settings.getInstance().getMaxBlocksPerMessage(), requestedSignatures.size());
+
+		List<Block> blocks = new ArrayList<>(blocksToAttempt);
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			for (int i = 0; i < blocksToAttempt; ++i) {
+				byte[] signature = requestedSignatures.get(i);
+
+				BlockData blockData = repository.getBlockRepository().fromSignature(signature);
+
+				if (blockData == null)
+					break;
+
+				if (PruneManager.getInstance().isBlockPruned(blockData.getHeight()))
+					break;
+
+				blocks.add(new Block(repository, blockData));
+			}
+
+			if (blocks.isEmpty()) {
+				Message blockUnknownMessage = peer.getPeersVersion() >= GenericUnknownMessage.MINIMUM_PEER_VERSION
+						? new GenericUnknownMessage()
+						: new BlockSummariesMessage(Collections.emptyList());
+				blockUnknownMessage.setId(message.getId());
+				if (!peer.sendMessage(blockUnknownMessage))
+					peer.disconnect("failed to send blocks-unknown response");
+				return;
+			}
+
+			Message blocksMessage = new BlocksMessage(blocks);
+			blocksMessage.setId(message.getId());
+
+			if (!peer.sendMessage(blocksMessage))
+				peer.disconnect("failed to send blocks");
+		} catch (DataException e) {
+			LOGGER.error(String.format("Repository issue while sending blocks to peer %s", peer), e);
+		} catch (MessageException e) {
+			LOGGER.error(String.format("Serialization issue while sending blocks to peer %s", peer), e);
 		}
 	}
 

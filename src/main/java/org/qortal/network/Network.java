@@ -159,7 +159,8 @@ public class Network {
     // Constructors
 
     private Network() {
-        maxMessageSize = 4 + 1 + 4 + BlockChain.getInstance().getMaxBlockSize();
+        int maxBlocksPerMessage = Settings.getInstance().getMaxBlocksPerMessage();
+        maxMessageSize = 4 + 1 + 4 + BlockChain.getInstance().getMaxBlockSize() * maxBlocksPerMessage;
 
         minOutboundPeers = Settings.getInstance().getMinOutboundPeers();
         maxPeers = Settings.getInstance().getMaxPeers();
