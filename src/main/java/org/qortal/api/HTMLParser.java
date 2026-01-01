@@ -88,7 +88,7 @@ public class HTMLParser {
         
         // For render context with non-default identifier, modify all relative script and link tags
         // to include the identifier query parameter (base tag doesn't reliably preserve query params)
-        if (Objects.equals(this.qdnContext, "render") && this.identifier != null && !this.identifier.equals("default")) {
+        if (Objects.equals(this.qdnContext, "render") && this.identifier != null && !this.identifier.isBlank() && !this.identifier.equals("default")) {
             String encodedIdentifier = URLEncoder.encode(this.identifier, StandardCharsets.UTF_8);
             
             // Modify script tags
