@@ -1,7 +1,10 @@
 package org.qortal.api;
 
 import io.swagger.v3.jaxrs2.integration.resources.OpenApiResource;
+import org.eclipse.jetty.alpn.server.ALPNServerConnectionFactory;
 import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.http2.HTTP2Cipher;
+import org.eclipse.jetty.http2.server.HTTP2ServerConnectionFactory;
 import org.eclipse.jetty.rewrite.handler.RedirectPatternRule;
 import org.eclipse.jetty.rewrite.handler.RewriteHandler;
 import org.eclipse.jetty.server.*;
@@ -20,16 +23,18 @@ import org.qortal.api.resource.ApiDefinition;
 import org.qortal.api.websocket.*;
 import org.qortal.network.Network;
 import org.qortal.settings.Settings;
+import org.qortal.utils.SslUtils;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.servlet.http.HttpServletRequest;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.security.Security;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 
@@ -74,55 +79,81 @@ public class ApiService {
 
 
 	public void start() {
+		//System.setProperty("javax.net.debug", "ssl,handshake");
 		try {
-			// Create API server
+			// 1. Setup Providers
+			Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
+			Security.addProvider(new org.bouncycastle.jsse.provider.BouncyCastleJsseProvider());
 
-			// SSL support if requested
 			String keystorePathname = Settings.getInstance().getSslKeystorePathname();
 			String keystorePassword = Settings.getInstance().getSslKeystorePassword();
 
 			if (keystorePathname != null && keystorePassword != null) {
-				// SSL version
-				if (!Files.isReadable(Path.of(keystorePathname)))
-					throw new RuntimeException("Failed to start SSL API due to broken keystore");
-
-				// BouncyCastle-specific SSLContext build
-				SSLContext sslContext = SSLContext.getInstance("TLSv1.3", "BCJSSE");
-				KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance("PKIX", "BCJSSE");
-
-				KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType(), "BC");
-
-				try (InputStream keystoreStream = Files.newInputStream(Paths.get(keystorePathname))) {
-					keyStore.load(keystoreStream, keystorePassword.toCharArray());
+				if (!Files.isReadable(Path.of(keystorePathname))) {
+					SslUtils.generateSsl();
 				}
 
-				keyManagerFactory.init(keyStore, keystorePassword.toCharArray());
-				sslContext.init(keyManagerFactory.getKeyManagers(), null, new SecureRandom());
-
+				// 2. SSL Context Factory
 				SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
-				sslContextFactory.setSslContext(sslContext);
+				sslContextFactory.setKeyStorePath(keystorePathname);
+				sslContextFactory.setKeyStorePassword(keystorePassword);
+				sslContextFactory.setKeyStoreType("PKCS12");
+				sslContextFactory.setKeyStoreProvider("BC");
+
+				// Use SunJSSE for ALPN support
+				sslContextFactory.setProvider("SunJSSE");
+				sslContextFactory.setProtocol("TLS");
+
+				// Disable Hostname Verification (Fixes "localhost" ALPN issues)
+				sslContextFactory.setEndpointIdentificationAlgorithm(null);
+
+				// We explicitly tell the server: "You MUST use a cipher that allows HTTP/2"
+				sslContextFactory.setIncludeCipherSuites("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
+				// HTTP/2 strict cipher compliance
+				sslContextFactory.setCipherComparator(HTTP2Cipher.COMPARATOR);
+				sslContextFactory.setUseCipherSuitesOrder(true);
 
 				this.server = new Server();
 
+				// 3. HTTP Configuration
 				HttpConfiguration httpConfig = new HttpConfiguration();
 				httpConfig.setSecureScheme("https");
 				httpConfig.setSecurePort(Settings.getInstance().getApiPort());
 
-				SecureRequestCustomizer src = new SecureRequestCustomizer();
-				httpConfig.addCustomizer(src);
+				// HTTPS Config (adds Strict Transport Security, etc.)
+				HttpConfiguration httpsConfig = new HttpConfiguration(httpConfig);
+				httpsConfig.addCustomizer(new SecureRequestCustomizer());
 
-				HttpConnectionFactory httpConnectionFactory = new HttpConnectionFactory(httpConfig);
-				SslConnectionFactory sslConnectionFactory = new SslConnectionFactory(sslContextFactory, HttpVersion.HTTP_1_1.asString());
+				// 4. Connection Factories
+				// HTTP/1.1 (The Workhorse)
+				HttpConnectionFactory http1 = new HttpConnectionFactory(httpsConfig);
 
-				ServerConnector portUnifiedConnector = new ServerConnector(this.server,
-						new DetectorConnectionFactory(sslConnectionFactory),
-						httpConnectionFactory);
-				portUnifiedConnector.setHost(Network.getInstance().getBindAddress());
-				portUnifiedConnector.setPort(Settings.getInstance().getApiPort());
+				// HTTP/2 (The Goal)
+				HTTP2ServerConnectionFactory h2 = new HTTP2ServerConnectionFactory(httpsConfig);
 
-				this.server.addConnector(portUnifiedConnector);
+				// ALPN (The Negotiator: "h2" or "http/1.1"?)
+				ALPNServerConnectionFactory alpn = new ALPNServerConnectionFactory();
+				alpn.setDefaultProtocol(http1.getProtocol());
+
+				// SSL (The Encryptor)
+				// It hands off to ALPN once decryption is done
+				SslConnectionFactory ssl = new SslConnectionFactory(sslContextFactory, alpn.getProtocol());
+
+				// Peeks at the first bytes. - If TLS -> sends to 'ssl';  Plain -> sends to 'http1'.
+				OptionalSslConnectionFactory optionalSsl = new OptionalSslConnectionFactory(ssl, http1.getProtocol());
+
+				// 5. The Unified Connector
+				// Order: Detector -> SSL -> ALPN -> H2 -> HTTP1
+				ServerConnector sslConnector = new ServerConnector(this.server,
+						optionalSsl, ssl, alpn, h2, http1);
+
+				sslConnector.setPort(Settings.getInstance().getApiPort());
+				sslConnector.setHost(Network.getInstance().getBindAddress());
+
+				this.server.addConnector(sslConnector);
+
 			} else {
-				// Non-SSL
+				// Non-SSL Mode
 				InetAddress bindAddr = InetAddress.getByName(Network.getInstance().getBindAddress());
 				InetSocketAddress endpoint = new InetSocketAddress(bindAddr, Settings.getInstance().getApiPort());
 				this.server = new Server(endpoint);
@@ -211,7 +242,10 @@ public class ApiService {
 			this.server.start();
 		} catch (Exception e) {
 			// Failed to start
+			System.err.println("Failed to start API");
+			e.printStackTrace();
 			throw new RuntimeException("Failed to start API", e);
+
 		}
 	}
 

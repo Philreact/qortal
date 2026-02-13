@@ -106,8 +106,8 @@ public class Settings {
 	private boolean apiLoggingEnabled = false;
 	private boolean apiDocumentationEnabled = false;
 	// Both of these need to be set for API to use SSL
-	private String sslKeystorePathname = null;
-	private String sslKeystorePassword = null;
+	private String sslKeystorePathname = "QortalKeyStore.jks";
+	private String sslKeystorePassword = "default";
 
 	// Domain mapping
 	private Integer domainMapPort;

@@ -86,6 +86,11 @@ public class Controller extends Thread {
 		// This must go before any calls to LogManager/Logger
 		System.setProperty("log4j2.formatMsgNoLookups", "true");
 		System.setProperty("java.util.logging.manager", "org.apache.logging.log4j.jul.LogManager");
+
+		// Temporary protobuf compatibility for legacy generated gRPC classes (cash.z.wallet.sdk.rpc).
+		if (System.getProperty("com.google.protobuf.use_unsafe_pre22_gencode") == null) {
+			System.setProperty("com.google.protobuf.use_unsafe_pre22_gencode", "true");
+		}
 	}
 
 	/** Controller start-up time (ms) taken using <tt>System.currentTimeMillis()</tt>. */

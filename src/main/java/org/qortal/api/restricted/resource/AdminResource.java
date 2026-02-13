@@ -32,18 +32,18 @@ import org.qortal.controller.Synchronizer.SynchronizationResult;
 import org.qortal.controller.repository.BlockArchiveRebuilder;
 import org.qortal.data.account.MintingAccountData;
 import org.qortal.data.account.RewardShareData;
-import org.qortal.data.system.DbConnectionInfo;
 import org.qortal.network.Network;
 import org.qortal.network.Peer;
 import org.qortal.network.PeerAddress;
-import org.qortal.repository.ReindexManager;
 import org.qortal.repository.DataException;
+import org.qortal.repository.ReindexManager;
 import org.qortal.repository.Repository;
 import org.qortal.repository.RepositoryManager;
 import org.qortal.settings.Settings;
 import org.qortal.data.system.SystemInfo;
 import org.qortal.utils.Base58;
 import org.qortal.utils.NTP;
+import org.qortal.utils.SslUtils;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.*;
@@ -71,6 +71,52 @@ public class AdminResource {
 
 	@Context
 	HttpServletRequest request;
+
+	private static final String CA_CERT_PATH = "ca.crt";
+
+	@POST
+	@Path("/http/createca")
+	@Operation(
+			summary = "Create a new local root CA",
+			description = "Generates and saves a new root CA certificate and key.",
+			responses = {
+					@ApiResponse(
+							description = "CA created successfully",
+							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+					)
+			}
+	)
+	@ApiErrors({ApiError.INVALID_DATA, ApiError.REPOSITORY_ISSUE})
+	@SecurityRequirement(name = "apiKey")
+	public String createCA() {
+		Security.checkApiCallAllowed(request);
+		try {
+			SslUtils.generateSsl();
+			return "CA and server certificate created successfully";
+		} catch (Exception e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_DATA, e);
+		}
+	}
+
+	@GET
+	@Path("/http/getca")
+	@Operation(
+			summary = "Get the local root CA certificate",
+			description = "Returns the root CA certificate in PEM format.",
+			responses = {
+					@ApiResponse(
+							description = "The root CA certificate",
+							content = @Content(mediaType = MediaType.TEXT_PLAIN, schema = @Schema(type = "string"))
+					)
+			}
+	)
+	public String getCA() {
+		try {
+			return new String(Files.readAllBytes(Paths.get(CA_CERT_PATH)));
+		} catch (IOException e) {
+			return "CA certificate not found.";
+		}
+	}
 
 	@GET
 	@Path("/unused")
