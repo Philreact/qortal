@@ -46,6 +46,8 @@ public class ArbitraryDataFileRequestThread {
 
     // Batching configuration
     private static final int MAX_BATCH_SIZE = 40;        // Maximum chunks per batch
+    private static final int INITIAL_BATCH_SIZE = 10;    // Smaller first batch to avoid overloading bad peers
+    private static final long BATCH_RAMP_UP_MS = 5000L; // Use INITIAL_BATCH_SIZE until this many ms since fetch started
     private static final long BATCH_INTERVAL_MS = 2000L;  // Interval between batches
     private static final long STALE_BATCH_TIMEOUT_MS = 300000L; // 5 minutes - remove batches that haven't completed
 
@@ -177,7 +179,7 @@ public class ArbitraryDataFileRequestThread {
                 Peer connectedPeer = NetworkData.getInstance().getPeerByPeerAddress( peerAddress );
 
                 if (connectedPeer == null)
-                    LOGGER.warn("connectedPeer is null, not connected");
+                    LOGGER.debug("connectedPeer is null, not connected, {}", peerString);
                 //if (connectedPeer != null && completeConnectedPeers.contains(connectedPeer)) {            // If the peer is now connected
                 if (connectedPeer != null ) {            // If the peer is now connected
                     LOGGER.trace("We are adding responseInfos from the queue");
@@ -516,7 +518,7 @@ public class ArbitraryDataFileRequestThread {
                 if (isNewBatch && batch.initialBatchSent.compareAndSet(false, true)) {
                     if (!batch.pendingChunks.isEmpty()) {
                         LOGGER.trace("Sending initial batch for signature {} with {} chunks", signature58, batch.pendingChunks.size());
-                        sendBatchForSignature(batch, MAX_BATCH_SIZE, arbitraryDataFileManager, true);
+                        sendBatchForSignature(batch, INITIAL_BATCH_SIZE, arbitraryDataFileManager, true);
                     } else {
                         // If no chunks yet, reset the flag so it can be sent later
                         batch.initialBatchSent.set(false);
@@ -689,8 +691,11 @@ public class ArbitraryDataFileRequestThread {
                                      batch.signature58, idleTime);
                     }
                 } else {
-                    // Send incremental batch (normal operation)
-                    sendBatchForSignature(batch, MAX_BATCH_SIZE, ArbitraryDataFileManager.getInstance(), false);
+                    // Send incremental batch (normal operation). Use smaller batch until ramp-up period has passed.
+                    int batchLimit = (elapsed >= BATCH_RAMP_UP_MS) ? MAX_BATCH_SIZE : INITIAL_BATCH_SIZE;
+                    LOGGER.trace("Sending incremental batch for signature {}: limit {} chunks (elapsed {}s)", 
+                            batch.signature58, batchLimit, elapsed / 1000);
+                    sendBatchForSignature(batch, batchLimit, ArbitraryDataFileManager.getInstance(), false);
                 }
             }
         } catch (Exception e) {
