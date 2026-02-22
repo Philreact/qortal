@@ -78,6 +78,35 @@ public class GroupsResource {
 	}
 
 	@GET
+	@Path("/active")
+	@Operation(
+		summary = "Most active groups by unique participants",
+		description = "Returns the groups with the most unique participating accounts (distinct senders), ordered by participant count descending. Only messages without a chat reference are counted. Efficient single-query endpoint.",
+		responses = {
+			@ApiResponse(
+				description = "group activity summaries with participant counts",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupActivitySummary.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupActivitySummary> getMostActiveGroups(
+			@Parameter(description = "Maximum number of groups to return") @QueryParam("limit") @DefaultValue("10") Integer limit) {
+		if (limit == null || limit < 1)
+			limit = 10;
+		else if (limit > 100)
+			limit = 100;
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			return repository.getChatRepository().getTopGroupsByParticipantCount(limit);
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
 	@Path("/owner/{address}")
 	@Operation(
 		summary = "List all groups owned by address",

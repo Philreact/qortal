@@ -7,6 +7,7 @@ import org.qortal.data.chat.ActiveChats;
 import org.qortal.data.chat.ActiveChats.DirectChat;
 import org.qortal.data.chat.ActiveChats.GroupChat;
 import org.qortal.data.chat.ChatMessage;
+import org.qortal.data.group.GroupActivitySummary;
 import org.qortal.data.group.GroupMemberData;
 import org.qortal.data.transaction.ChatTransactionData;
 import org.qortal.repository.ChatRepository;
@@ -322,6 +323,40 @@ public class HSQLDBChatRepository implements ChatRepository {
 		}
 
 		return groupChats;
+	}
+
+	@Override
+	public List<GroupActivitySummary> getTopGroupsByParticipantCount(int limit) throws DataException {
+		// Single query: count distinct senders per group (recipient IS NULL, no chat_reference, tx_group_id > 0), join Groups, order by count DESC
+		String sql = "SELECT g.group_id, g.group_name, g.owner, cnt.participant_count, g.description, g.is_open "
+				+ "FROM ("
+				+ "SELECT t.tx_group_id AS gid, COUNT(DISTINCT c.sender) AS participant_count "
+				+ "FROM ChatTransactions c "
+				+ "INNER JOIN Transactions t ON t.signature = c.signature "
+				+ "WHERE t.type = ? AND c.recipient IS NULL AND c.chat_reference IS NULL AND t.tx_group_id > 0 "
+				+ "GROUP BY t.tx_group_id"
+				+ ") cnt "
+				+ "INNER JOIN Groups g ON g.group_id = cnt.gid "
+				+ "ORDER BY cnt.participant_count DESC "
+				+ "LIMIT ?";
+
+		List<GroupActivitySummary> results = new ArrayList<>();
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, TransactionType.CHAT.value, limit)) {
+			if (resultSet != null) {
+				do {
+					int groupId = resultSet.getInt(1);
+					String groupName = resultSet.getString(2);
+					String owner = resultSet.getString(3);
+					long participantCount = resultSet.getLong(4);
+					String description = resultSet.getString(5);
+					boolean isOpen = resultSet.getBoolean(6);
+					results.add(new GroupActivitySummary(groupId, groupName, owner, participantCount, description, isOpen));
+				} while (resultSet.next());
+			}
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch top groups by participant count", e);
+		}
+		return results;
 	}
 
 	private List<DirectChat> getActiveDirectChats(String address, Boolean hasChatReference) throws DataException {
