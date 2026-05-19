@@ -33,3 +33,4 @@
 apikey.txt
 /.env
 /.m2-local
+/.venv-pdf/

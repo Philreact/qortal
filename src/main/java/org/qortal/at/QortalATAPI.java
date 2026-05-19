@@ -65,32 +65,72 @@ public class QortalATAPI extends API {
 	}
 
 	public boolean willExecute(int blockHeight) throws DataException {
-		// Sleep-until-message/height checking
-		Long sleepUntilMessageTimestamp = this.atData.getSleepUntilMessageTimestamp();
+		return willExecute(blockHeight, null, false);
+	}
 
-		if (sleepUntilMessageTimestamp != null) {
-			// Quicker to check height, if sleep-until-height also active
+	public boolean willExecute(int blockHeight, NextTransactionInfo precomputedWake) throws DataException {
+		return willExecute(blockHeight, precomputedWake, precomputedWake != null);
+	}
+
+	public boolean willExecute(int blockHeight, NextTransactionInfo precomputedWake, boolean precomputedWakeAvailable) throws DataException {
+		ATExecInstrumentation inst = ATExecInstrumentation.peek();
+		long wallStart = System.nanoTime();
+		Long sleepTsAtEntry = this.atData.getSleepUntilMessageTimestamp();
+
+		try {
+
+			if (sleepTsAtEntry == null) {
+				if (inst != null)
+					inst.exec_sum_willExecute_noSleepTs_fastTrueCount++;
+				return true;
+			}
+
+			long branchStart = System.nanoTime();
 			Integer sleepUntilHeight = this.atData.getSleepUntilHeight();
 
 			boolean wakeDueToHeight = sleepUntilHeight != null && sleepUntilHeight != 0 && blockHeight >= sleepUntilHeight;
 
 			boolean wakeDueToMessage = false;
 			if (!wakeDueToHeight) {
-				// No avoiding asking repository
-				Timestamp previousTxTimestamp = new Timestamp(sleepUntilMessageTimestamp);
-				NextTransactionInfo nextTransactionInfo = this.repository.getATRepository().findNextTransaction(this.atData.getATAddress(),
-						previousTxTimestamp.blockHeight,
-						previousTxTimestamp.transactionSequence);
+				long tPrepBeforeTs = System.nanoTime();
+				Timestamp previousTxTimestamp = new Timestamp(sleepTsAtEntry);
+				long tPrepAfterTs = System.nanoTime();
+				if (inst != null)
+					inst.exec_sum_willExecute_sleepFindNextPrepNanos += tPrepAfterTs - tPrepBeforeTs;
+
+				NextTransactionInfo nextTransactionInfo = precomputedWakeAvailable
+						? precomputedWake
+						: this.repository.getATRepository().findNextTransaction(
+								this.atData.getATAddress(),
+								previousTxTimestamp.blockHeight,
+								previousTxTimestamp.transactionSequence);
 
 				wakeDueToMessage = nextTransactionInfo != null;
+				if (inst != null && wakeDueToMessage)
+					inst.exec_sum_willExecute_sleepFindNextWakeCount++;
+			} else if (inst != null) {
+				inst.exec_sum_willExecute_sleepWakeByHeightOnlyCount++;
+				inst.exec_sum_willExecute_sleepWakeByHeightOnlyNanos += System.nanoTime() - branchStart;
 			}
 
-			// Can we skip?
-			if (!wakeDueToHeight && !wakeDueToMessage)
+			if (!wakeDueToHeight && !wakeDueToMessage) {
+				if (inst != null) {
+					inst.exec_sum_willExecute_returnFalse_sleepingCount++;
+					inst.exec_sum_willExecute_returnFalse_sleepNanos += System.nanoTime() - branchStart;
+				}
 				return false;
-		}
+			}
 
-		return true;
+			return true;
+
+		} finally {
+			if (inst != null) {
+				long elapsed = System.nanoTime() - wallStart;
+				inst.exec_sum_willExecute_totalNanos += elapsed;
+				if (sleepTsAtEntry == null)
+					inst.exec_sum_willExecute_noSleepTs_fastTrueNanos += elapsed;
+			}
+		}
 	}
 
 	public void preExecute(MachineState state) {

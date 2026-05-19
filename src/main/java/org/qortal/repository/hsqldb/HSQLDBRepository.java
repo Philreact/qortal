@@ -906,7 +906,7 @@ public class HSQLDBRepository implements Repository {
 	 * @return number of changed rows
 	 * @throws SQLException
 	 */
-	/* package */ int executeCheckedUpdate(String sql, Object... objects) throws SQLException {
+	public int executeCheckedUpdate(String sql, Object... objects) throws SQLException {
 		return this.executeCheckedBatchUpdate(sql, Collections.singletonList(objects));
 	}
 

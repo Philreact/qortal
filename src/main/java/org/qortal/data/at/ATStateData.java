@@ -9,6 +9,7 @@ public class ATStateData {
 	private byte[] stateHash;
 	private Long fees;
 	private boolean isInitial;
+	private Integer previousHeight;
 
 	// Qortal-AT-specific
 	private Long sleepUntilMessageTimestamp;
@@ -67,6 +68,14 @@ public class ATStateData {
 
 	public boolean isInitial() {
 		return this.isInitial;
+	}
+
+	public Integer getPreviousHeight() {
+		return this.previousHeight;
+	}
+
+	public void setPreviousHeight(Integer previousHeight) {
+		this.previousHeight = previousHeight;
 	}
 
 	public Long getSleepUntilMessageTimestamp() {

@@ -42,6 +42,8 @@ public class Synchronizer extends Thread {
 
 	private static final Logger LOGGER = LogManager.getLogger(Synchronizer.class);
 
+	private static final long SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS = 250_000_000L;
+
 	/** Max number of new blocks we aim to add to chain tip in each sync round */
 	private static final int SYNC_BATCH_SIZE = 1000; // XXX move to Settings?
 
@@ -1591,9 +1593,28 @@ public class Synchronizer extends Thread {
             if (Controller.isStopping())
                 return SynchronizationResult.SHUTTING_DOWN;
 
+            final long batchStart = System.nanoTime();
+            long fetchBlocksNanos;
+            long setSavepointNanos = 0L;
+            long signatureValidationNanos = 0L;
+            long setRepositoryNanos = 0L;
+            long setInitialApprovalNanos = 0L;
+            long blockIsValidNanos = 0L;
+            long saveTransactionsNanos = 0L;
+            long blockProcessNanos = 0L;
+            long onNewBlockNanos = 0L;
+            long batchSaveChangesNanos = 0L;
+            long rollbackNanos = 0L;
+            int processedBlockCount = 0;
+            int transactionCount = 0;
+            int firstBatchHeight = ourHeight + 1;
+            int lastBatchHeight = ourHeight;
+
             int numberRequested = Math.min(maxBatchHeight - ourHeight, maxBlocksPerRequest);
 
+            long tFetch = System.nanoTime();
             List<Block> blocks = this.fetchBlocks(repository, peer, latestPeerSignature, numberRequested);
+            fetchBlocksNanos = System.nanoTime() - tFetch;
 
             if (blocks == null || blocks.isEmpty()) {
                 LOGGER.warn(String.format("Peer %s failed to respond with more blocks after height %d, sig %.8s", peer,
@@ -1606,9 +1627,19 @@ public class Synchronizer extends Thread {
             boolean errorInBatch = false;
             SynchronizationResult errorCode = SynchronizationResult.OK;
 
+            long tSavepoint = System.nanoTime();
             repository.setSavepoint();
+            setSavepointNanos = System.nanoTime() - tSavepoint;
 
             for (Block newBlock : blocks) {
+                final long blockStart = System.nanoTime();
+                long blockSignatureValidationNanos = 0L;
+                long blockSetInitialApprovalNanos = 0L;
+                long blockIsValidOnlyNanos = 0L;
+                long blockSaveTransactionsNanos = 0L;
+                long blockProcessOnlyNanos = 0L;
+                long blockOnNewBlockOnlyNanos = 0L;
+
                 if (Controller.isStopping()){
                     errorInBatch = true;
                     errorCode = SynchronizationResult.SHUTTING_DOWN;
@@ -1626,23 +1657,36 @@ public class Synchronizer extends Thread {
                     break; // Stop processing batch - can't trust subsequent blocks
                 }
 
+                long tSignatureValidation = System.nanoTime();
                 if (!newBlock.isSignatureValid()) {
+                    blockSignatureValidationNanos = System.nanoTime() - tSignatureValidation;
+                    signatureValidationNanos += blockSignatureValidationNanos;
                     LOGGER.debug(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
                             expectedHeight, Base58.encode(latestPeerSignature)));
                     errorInBatch = true;
                     errorCode = SynchronizationResult.INVALID_DATA;
                     break; // Stop processing batch - can't trust subsequent blocks
                 }
+                blockSignatureValidationNanos = System.nanoTime() - tSignatureValidation;
+                signatureValidationNanos += blockSignatureValidationNanos;
 
                 // Set the repository, because we couldn't do that when originally constructing the Block
+                long tSetRepository = System.nanoTime();
                 newBlock.setRepository(repository);
+                setRepositoryNanos += System.nanoTime() - tSetRepository;
 
                 // Transactions are transmitted without approval status so determine that now
+                long tSetInitialApproval = System.nanoTime();
                 for (Transaction transaction : newBlock.getTransactions()) {
                     transaction.setInitialApprovalStatus();
                 }
+                blockSetInitialApprovalNanos = System.nanoTime() - tSetInitialApproval;
+                setInitialApprovalNanos += blockSetInitialApprovalNanos;
 
+                long tBlockIsValid = System.nanoTime();
                 ValidationResult blockResult = newBlock.isValid();
+                blockIsValidOnlyNanos = System.nanoTime() - tBlockIsValid;
+                blockIsValidNanos += blockIsValidOnlyNanos;
                 if (blockResult != ValidationResult.OK) {
                     LOGGER.warn(String.format("Peer %s sent invalid block for height %d, sig %.8s: %s", peer,
                             expectedHeight, Base58.encode(latestPeerSignature), blockResult.name()));
@@ -1655,27 +1699,64 @@ public class Synchronizer extends Thread {
                 ++ourHeight;
 
                 // Save transactions attached to this block
+                long tSaveTransactions = System.nanoTime();
                 for (Transaction transaction : newBlock.getTransactions()) {
                     TransactionData transactionData = transaction.getTransactionData();
                     repository.getTransactionRepository().save(transactionData);
                 }
+                blockSaveTransactionsNanos = System.nanoTime() - tSaveTransactions;
+                saveTransactionsNanos += blockSaveTransactionsNanos;
 
+                long tBlockProcess = System.nanoTime();
                 newBlock.process();
+                blockProcessOnlyNanos = System.nanoTime() - tBlockProcess;
+                blockProcessNanos += blockProcessOnlyNanos;
 
                 LOGGER.trace(String.format("Processed block height %d, sig %.8s", newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getBlockData().getSignature())));
 
+                long tOnNewBlock = System.nanoTime();
                 Controller.getInstance().onNewBlock(newBlock.getBlockData());
+                blockOnNewBlockOnlyNanos = System.nanoTime() - tOnNewBlock;
+                onNewBlockNanos += blockOnNewBlockOnlyNanos;
 
                 // Update latestPeerSignature so that subsequent batches start requesting from the correct block
                 latestPeerSignature = newBlock.getSignature();
+                processedBlockCount++;
+                transactionCount += newBlock.getTransactions().size();
+                lastBatchHeight = ourHeight;
+
+                long blockTotalNanos = System.nanoTime() - blockStart;
+                if (blockTotalNanos >= SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS)
+                    LOGGER.info("[Synchronizer] mode=fast peer={} blockHeight={} step=SYNC_BLOCK_SLOW total_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} transaction_count={}",
+                            peer, expectedHeight,
+                            formatMillis(blockTotalNanos),
+                            formatMillis(blockSignatureValidationNanos),
+                            formatMillis(blockSetInitialApprovalNanos),
+                            formatMillis(blockIsValidOnlyNanos),
+                            formatMillis(blockSaveTransactionsNanos),
+                            formatMillis(blockProcessOnlyNanos),
+                            formatMillis(blockOnNewBlockOnlyNanos),
+                            newBlock.getTransactions().size());
             }
 
             if(errorInBatch) {  // if error
+                long tRollback = System.nanoTime();
                 repository.rollbackToSavepoint();
+                rollbackNanos = System.nanoTime() - tRollback;
+                logSyncBatchOverview("fast", peer, firstBatchHeight, lastBatchHeight, blocks.size(), processedBlockCount,
+                        transactionCount, batchStart, fetchBlocksNanos, setSavepointNanos, signatureValidationNanos,
+                        setRepositoryNanos, setInitialApprovalNanos, blockIsValidNanos, saveTransactionsNanos,
+                        blockProcessNanos, onNewBlockNanos, batchSaveChangesNanos, rollbackNanos, errorCode);
                 return errorCode;
             }
             else{
+                long tSaveChanges = System.nanoTime();
                 repository.saveChanges();
+                batchSaveChangesNanos = System.nanoTime() - tSaveChanges;
+                logSyncBatchOverview("fast", peer, firstBatchHeight, lastBatchHeight, blocks.size(), processedBlockCount,
+                        transactionCount, batchStart, fetchBlocksNanos, setSavepointNanos, signatureValidationNanos,
+                        setRepositoryNanos, setInitialApprovalNanos, blockIsValidNanos, saveTransactionsNanos,
+                        blockProcessNanos, onNewBlockNanos, batchSaveChangesNanos, rollbackNanos, SynchronizationResult.OK);
             }
         }
         return SynchronizationResult.OK;
@@ -1701,6 +1782,18 @@ public class Synchronizer extends Thread {
             if (Controller.isStopping())
                 return SynchronizationResult.SHUTTING_DOWN;
 
+            final long blockStart = System.nanoTime();
+            long fetchSignaturesNanos = 0L;
+            long fetchBlockNanos;
+            long signatureValidationNanos;
+            long setInitialApprovalNanos;
+            long blockIsValidNanos;
+            long saveTransactionsNanos;
+            long blockProcessNanos;
+            long saveChangesNanos;
+            long onNewBlockNanos;
+            int expectedHeight = ourHeight + 1;
+
             // Do we need more signatures?
             if (peerBlockSignatures.isEmpty()) {
                 int numberRequested = Math.min(maxBatchHeight - ourHeight, MAXIMUM_REQUEST_SIZE);
@@ -1708,7 +1801,9 @@ public class Synchronizer extends Thread {
                 LOGGER.trace(String.format("Requesting %d signature%s after height %d, sig %.8s",
                         numberRequested, (numberRequested != 1 ? "s": ""), ourHeight, Base58.encode(latestPeerSignature)));
 
+                long tFetchSignatures = System.nanoTime();
                 peerBlockSignatures = this.getBlockSignatures(peer, latestPeerSignature, numberRequested);
+                fetchSignaturesNanos = System.nanoTime() - tFetchSignatures;
 
                 if (peerBlockSignatures == null || peerBlockSignatures.isEmpty()) {
                     LOGGER.info(String.format("Peer %s failed to respond with more block signatures after height %d, sig %.8s", peer,
@@ -1724,7 +1819,9 @@ public class Synchronizer extends Thread {
             ++ourHeight;
 
             LOGGER.trace(String.format("Fetching block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
+            long tFetchBlock = System.nanoTime();
             Block newBlock = this.fetchBlock(repository, peer, latestPeerSignature);
+            fetchBlockNanos = System.nanoTime() - tFetchBlock;
             LOGGER.trace(String.format("Fetched block %d, sig %.8s from %s", ourHeight, Base58.encode(latestPeerSignature), peer));
 
             if (newBlock == null) {
@@ -1733,17 +1830,24 @@ public class Synchronizer extends Thread {
                 return SynchronizationResult.NO_REPLY;
             }
 
+            long tSignatureValidation = System.nanoTime();
             if (!newBlock.isSignatureValid()) {
+                signatureValidationNanos = System.nanoTime() - tSignatureValidation;
                 LOGGER.info(String.format("Peer %s sent block with invalid signature for height %d, sig %.8s", peer,
                         ourHeight, Base58.encode(latestPeerSignature)));
                 return SynchronizationResult.INVALID_DATA;
             }
+            signatureValidationNanos = System.nanoTime() - tSignatureValidation;
 
             // Transactions are transmitted without approval status so determine that now
+            long tSetInitialApproval = System.nanoTime();
             for (Transaction transaction : newBlock.getTransactions())
                 transaction.setInitialApprovalStatus();
+            setInitialApprovalNanos = System.nanoTime() - tSetInitialApproval;
 
+            long tBlockIsValid = System.nanoTime();
             ValidationResult blockResult = newBlock.isValid();
+            blockIsValidNanos = System.nanoTime() - tBlockIsValid;
             if (blockResult != ValidationResult.OK) {
                 LOGGER.info(String.format("Peer %s sent invalid block for height %d, sig %.8s: %s", peer,
                         ourHeight, Base58.encode(latestPeerSignature), blockResult.name()));
@@ -1751,22 +1855,89 @@ public class Synchronizer extends Thread {
             }
 
             // Save transactions attached to this block
+            long tSaveTransactions = System.nanoTime();
             for (Transaction transaction : newBlock.getTransactions()) {
                 TransactionData transactionData = transaction.getTransactionData();
                 repository.getTransactionRepository().save(transactionData);
             }
+            saveTransactionsNanos = System.nanoTime() - tSaveTransactions;
 
+            long tBlockProcess = System.nanoTime();
             newBlock.process();
+            blockProcessNanos = System.nanoTime() - tBlockProcess;
 
             LOGGER.trace(String.format("Processed block height %d, sig %.8s", newBlock.getBlockData().getHeight(), Base58.encode(newBlock.getBlockData().getSignature())));
 
+            long tSaveChanges = System.nanoTime();
             repository.saveChanges();
+            saveChangesNanos = System.nanoTime() - tSaveChanges;
 
+            long tOnNewBlock = System.nanoTime();
             Controller.getInstance().onNewBlock(newBlock.getBlockData());
+            onNewBlockNanos = System.nanoTime() - tOnNewBlock;
+
+            long blockTotalNanos = System.nanoTime() - blockStart;
+            LOGGER.info("[Synchronizer] mode=slow peer={} first_height={} last_height={} requested_blocks=1 processed_blocks=1 transaction_count={} step=SYNC_BATCH_OVERVIEW total_ms={} fetch_signatures_ms={} fetch_block_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} batch_save_changes_ms={} avg_per_block_ms={} result={}",
+                    peer, expectedHeight, expectedHeight, newBlock.getTransactions().size(),
+                    formatMillis(blockTotalNanos),
+                    formatMillis(fetchSignaturesNanos),
+                    formatMillis(fetchBlockNanos),
+                    formatMillis(signatureValidationNanos),
+                    formatMillis(setInitialApprovalNanos),
+                    formatMillis(blockIsValidNanos),
+                    formatMillis(saveTransactionsNanos),
+                    formatMillis(blockProcessNanos),
+                    formatMillis(onNewBlockNanos),
+                    formatMillis(saveChangesNanos),
+                    formatMillis(blockTotalNanos),
+                    SynchronizationResult.OK);
+
+            if (blockTotalNanos >= SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS)
+                LOGGER.info("[Synchronizer] mode=slow peer={} blockHeight={} step=SYNC_BLOCK_SLOW total_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} transaction_count={}",
+                        peer, expectedHeight,
+                        formatMillis(blockTotalNanos),
+                        formatMillis(signatureValidationNanos),
+                        formatMillis(setInitialApprovalNanos),
+                        formatMillis(blockIsValidNanos),
+                        formatMillis(saveTransactionsNanos),
+                        formatMillis(blockProcessNanos),
+                        formatMillis(onNewBlockNanos),
+                        newBlock.getTransactions().size());
         }
 
         return SynchronizationResult.OK;
     }
+
+	private void logSyncBatchOverview(String mode, Peer peer, int firstHeight, int lastHeight, int requestedBlockCount,
+			int processedBlockCount, int transactionCount, long batchStartNanos, long fetchBlocksNanos,
+			long setSavepointNanos, long signatureValidationNanos, long setRepositoryNanos,
+			long setInitialApprovalNanos, long blockIsValidNanos, long saveTransactionsNanos,
+			long blockProcessNanos, long onNewBlockNanos, long batchSaveChangesNanos, long rollbackNanos,
+			SynchronizationResult result) {
+		long totalNanos = System.nanoTime() - batchStartNanos;
+		long avgPerBlockNanos = processedBlockCount == 0 ? 0L : totalNanos / processedBlockCount;
+
+		LOGGER.info("[Synchronizer] mode={} peer={} first_height={} last_height={} requested_blocks={} processed_blocks={} transaction_count={} step=SYNC_BATCH_OVERVIEW total_ms={} fetch_blocks_ms={} set_savepoint_ms={} signature_validation_ms={} set_repository_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} batch_save_changes_ms={} rollback_ms={} avg_per_block_ms={} result={}",
+				mode, peer, firstHeight, lastHeight, requestedBlockCount, processedBlockCount, transactionCount,
+				formatMillis(totalNanos),
+				formatMillis(fetchBlocksNanos),
+				formatMillis(setSavepointNanos),
+				formatMillis(signatureValidationNanos),
+				formatMillis(setRepositoryNanos),
+				formatMillis(setInitialApprovalNanos),
+				formatMillis(blockIsValidNanos),
+				formatMillis(saveTransactionsNanos),
+				formatMillis(blockProcessNanos),
+				formatMillis(onNewBlockNanos),
+				formatMillis(batchSaveChangesNanos),
+				formatMillis(rollbackNanos),
+				formatMillis(avgPerBlockNanos),
+				result);
+	}
+
+	private static String formatMillis(long nanoseconds) {
+		return String.format(Locale.ROOT, "%.3f", nanoseconds / 1_000_000.0);
+	}
 
 	private List<BlockSummaryData> getBlockSummaries(Peer peer, byte[] parentSignature, int numberRequested) throws InterruptedException {
 		Message getBlockSummariesMessage = new GetBlockSummariesMessage(parentSignature, numberRequested);

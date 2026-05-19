@@ -186,6 +186,9 @@ public interface AccountRepository {
 	/** Modifies account's asset balance by <tt>deltaBalance</tt>. */
 	public void modifyAssetBalance(String address, long assetId, long deltaBalance) throws DataException;
 
+	/** Batch-reduces account asset balances, treating AccountBalanceData.balance as a negative <tt>deltaBalance</tt>. */
+	public void reduceAssetBalances(List<AccountBalanceData> accountBalanceDeltas) throws DataException;
+
 	/** Modifies a batch of account asset balances, treating AccountBalanceData.balance as <tt>deltaBalance</tt>. */
 	public void modifyAssetBalances(List<AccountBalanceData> accountBalanceDeltas) throws DataException;
 

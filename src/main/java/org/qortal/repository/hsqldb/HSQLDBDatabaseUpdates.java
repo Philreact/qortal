@@ -7,6 +7,7 @@ import org.qortal.controller.tradebot.BitcoinACCTv1TradeBot;
 import org.qortal.gui.SplashFrame;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -1069,6 +1070,223 @@ public class HSQLDBDatabaseUpdates {
 
 					break;
 
+				case 52:
+
+					// Compatibility placeholder.
+					// Some local databases already ran an earlier experimental case 52 and advanced to version 53.
+					// The actual AT incoming cursor migration lives in case 53 so those databases still receive it.
+					break;
+
+				case 53:
+
+					// Drop failed experimental AT recipient table if it exists in local databases.
+					stmt.execute("DROP TABLE IF EXISTS ATRecipientTransactions");
+
+					// Derived/rebuildable inbox of confirmed transactions addressed to existing ATs.
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATIncomingTransactions ("
+							+ "AT_address QortalAddress NOT NULL, block_height INTEGER NOT NULL, block_sequence INTEGER NOT NULL, signature Signature NOT NULL, "
+							+ "PRIMARY KEY (AT_address, block_height, block_sequence, signature))");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATIncomingTransactionsSignatureIndex ON ATIncomingTransactions (signature)");
+
+					// Derived/rebuildable cursor. Nullable target columns mean the AT is sleeping but has no next incoming transaction.
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATNextIncoming ("
+							+ "AT_address QortalAddress NOT NULL, sleep_until_message_timestamp BIGINT NOT NULL, "
+							+ "block_height INTEGER, block_sequence INTEGER, signature Signature, "
+							+ "PRIMARY KEY (AT_address))");
+
+					LOGGER.info("Rebuilding AT incoming transaction cache - this can take a while...");
+					stmt.execute("DELETE FROM ATIncomingTransactions");
+					stmt.execute("INSERT INTO ATIncomingTransactions (AT_address, block_height, block_sequence, signature) "
+							+ "SELECT AT_address, block_height, block_sequence, signature FROM ("
+							+ "SELECT PT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
+							+ "FROM PaymentTransactions PT "
+							+ "JOIN Transactions T USING (signature) "
+							+ "JOIN ATs ON ATs.AT_address = PT.recipient "
+							+ "UNION "
+							+ "SELECT MT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
+							+ "FROM MessageTransactions MT "
+							+ "JOIN Transactions T USING (signature) "
+							+ "JOIN ATs ON ATs.AT_address = MT.recipient "
+							+ "UNION "
+							+ "SELECT ATT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
+							+ "FROM ATTransactions ATT "
+							+ "JOIN Transactions T USING (signature) "
+							+ "JOIN ATs ON ATs.AT_address = ATT.recipient"
+							+ ") AS Incoming "
+							+ "WHERE block_height IS NOT NULL AND block_sequence IS NOT NULL");
+
+					break;
+
+				case 54:
+
+					// Derived/rebuildable pointer to each AT's current latest state data row for execution hot path.
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATCurrentState ("
+							+ "AT_address QortalAddress NOT NULL, height INTEGER NOT NULL, "
+							+ "PRIMARY KEY (AT_address))");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATStatesDataAddressHeightIndex ON ATStatesData (AT_address, height)");
+
+					LOGGER.info("Rebuilding AT current state pointer cache - this can take a while...");
+					stmt.execute("DELETE FROM ATCurrentState");
+					stmt.execute("INSERT INTO ATCurrentState (AT_address, height) "
+							+ "SELECT AT_address, MAX(height) "
+							+ "FROM ATStatesData "
+							+ "GROUP BY AT_address");
+
+					break;
+
+				case 55:
+
+					// Canonical content-addressed AT state blobs. ATStates remains the per-height consensus metadata.
+					if (!columnExists(connection, "ATSTATES", "PREVIOUS_HEIGHT"))
+						stmt.execute("ALTER TABLE ATStates ADD previous_height INTEGER");
+
+					LOGGER.info("Skipping historical AT state previous-height backfill; new AT state rows will populate it going forward");
+
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATStateBlobs ("
+							+ "state_hash ATStateHash NOT NULL, state_data ATState NOT NULL, "
+							+ "created_height INTEGER NOT NULL, state_data_length INTEGER NOT NULL, "
+							+ "PRIMARY KEY (state_hash))");
+					stmt.execute("SET TABLE ATStateBlobs NEW SPACE");
+
+					LOGGER.info("Backfilling content-addressed AT state blobs from legacy AT state data - this can take a while...");
+					try (ResultSet resultSet = stmt.executeQuery("SELECT ATStates.state_hash, ATStatesData.state_data, ATStates.height "
+							+ "FROM ATStates "
+							+ "JOIN ATStatesData USING (AT_address, height)");
+							PreparedStatement preparedStatement = connection.prepareStatement("INSERT INTO ATStateBlobs "
+									+ "(state_hash, state_data, created_height, state_data_length) VALUES (?, ?, ?, ?) "
+									+ "ON DUPLICATE KEY UPDATE state_hash = state_hash")) {
+						int batchCount = 0;
+
+						while (resultSet.next()) {
+							byte[] stateData = resultSet.getBytes(2);
+							preparedStatement.setBytes(1, resultSet.getBytes(1));
+							preparedStatement.setBytes(2, stateData);
+							preparedStatement.setInt(3, resultSet.getInt(3));
+							preparedStatement.setInt(4, stateData.length);
+							preparedStatement.addBatch();
+
+							if (++batchCount % 1000 == 0)
+								preparedStatement.executeBatch();
+						}
+
+						preparedStatement.executeBatch();
+					}
+
+					break;
+
+				case 56:
+
+					// Hot-path copy of the rebuildable current-state pointer, folded into AT runtime metadata updates.
+					// ATCurrentState remains as a compatibility/rebuild cache.
+					if (!columnExists(connection, "ATS", "CURRENT_STATE_HEIGHT"))
+						stmt.execute("ALTER TABLE ATs ADD current_state_height INTEGER");
+
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATsCurrentStateHeightIndex ON ATs (current_state_height)");
+
+					LOGGER.info("Backfilling AT runtime current-state heights from canonical AT state rows - this can take a while...");
+					stmt.execute("UPDATE ATs SET current_state_height = ("
+							+ "SELECT MAX(height) "
+							+ "FROM ATStates "
+							+ "LEFT OUTER JOIN ATStateBlobs USING (state_hash) "
+							+ "LEFT OUTER JOIN ATStatesData USING (AT_address, height) "
+							+ "WHERE ATStates.AT_address = ATs.AT_address "
+							+ "AND (ATStateBlobs.state_hash IS NOT NULL OR ATStatesData.AT_address IS NOT NULL))");
+
+					break;
+
+				case 57:
+
+					// Narrow mutable AT runtime table. ATs keeps immutable deployment/code data; hot block processing
+					// updates ATRuntime to avoid rewriting wide ATs rows.
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATRuntime ("
+							+ "AT_address QortalAddress NOT NULL, "
+							+ "is_sleeping BOOLEAN NOT NULL, sleep_until_height INTEGER, "
+							+ "is_finished BOOLEAN NOT NULL, had_fatal_error BOOLEAN NOT NULL, "
+							+ "is_frozen BOOLEAN NOT NULL, frozen_balance QortalAmount, "
+							+ "sleep_until_message_timestamp BIGINT, current_state_height INTEGER, "
+							+ "PRIMARY KEY (AT_address), FOREIGN KEY (AT_address) REFERENCES ATs (AT_address) ON DELETE CASCADE)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedIndex ON ATRuntime (is_finished)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeSleepMessageIndex ON ATRuntime (sleep_until_message_timestamp)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeCurrentStateHeightIndex ON ATRuntime (current_state_height)");
+
+					LOGGER.info("Backfilling narrow AT runtime metadata table from ATs - this can take a while...");
+					stmt.execute("DELETE FROM ATRuntime");
+					stmt.execute("INSERT INTO ATRuntime (AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
+							+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height) "
+							+ "SELECT AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
+							+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height "
+							+ "FROM ATs");
+
+					break;
+
+				case 58:
+
+					// Match the executable-AT hot path after mutable runtime state moved out of ATs.
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedAddressIndex ON ATRuntime (is_finished, AT_address)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATCreatedOrderIndex ON ATs (created_when, AT_address)");
+
+					break;
+
+				case 59:
+
+					// Derived scheduler for AT execution. Canonical runtime state remains in ATRuntime/ATStates.
+					stmt.execute("CREATE TABLE IF NOT EXISTS ATExecutionQueue ("
+							+ "AT_address QortalAddress NOT NULL, next_height INTEGER NOT NULL, "
+							+ "PRIMARY KEY (AT_address), FOREIGN KEY (AT_address) REFERENCES ATs (AT_address) ON DELETE CASCADE)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATExecutionQueueNextHeightIndex ON ATExecutionQueue (next_height, AT_address)");
+
+					stmt.execute("DELETE FROM ATExecutionQueue");
+					stmt.execute("INSERT INTO ATExecutionQueue (AT_address, next_height) "
+							+ "SELECT ATs.AT_address, "
+							+ "CASE "
+								+ "WHEN ATRuntime.sleep_until_message_timestamp IS NULL THEN 0 "
+								+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
+									+ "AND ATRuntime.sleep_until_height != 0 "
+									+ "AND ATNextIncoming.block_height IS NOT NULL "
+									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
+									+ "THEN CASE "
+										+ "WHEN ATRuntime.sleep_until_height <= ATNextIncoming.block_height + 1 "
+											+ "THEN ATRuntime.sleep_until_height "
+										+ "ELSE ATNextIncoming.block_height + 1 "
+									+ "END "
+								+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
+									+ "AND ATRuntime.sleep_until_height != 0 "
+									+ "THEN ATRuntime.sleep_until_height "
+								+ "WHEN ATNextIncoming.block_height IS NOT NULL "
+									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
+									+ "THEN ATNextIncoming.block_height + 1 "
+							+ "END "
+							+ "FROM ATs "
+							+ "JOIN ATRuntime ON ATRuntime.AT_address = ATs.AT_address "
+							+ "LEFT OUTER JOIN ATNextIncoming ON ATNextIncoming.AT_address = ATs.AT_address "
+							+ "WHERE ATRuntime.is_finished = false "
+							+ "AND (ATRuntime.sleep_until_message_timestamp IS NULL "
+								+ "OR (ATRuntime.sleep_until_height IS NOT NULL AND ATRuntime.sleep_until_height != 0) "
+								+ "OR (ATNextIncoming.block_height IS NOT NULL "
+									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp))");
+
+					break;
+
+				case 60:
+
+					// The event-driven AT inbox maintenance and orphan path delete by block height.
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATIncomingTransactionsBlockHeightIndex "
+							+ "ON ATIncomingTransactions (block_height, AT_address)");
+
+					break;
+
+				case 61:
+
+					// Keep the AT execution-queue verifier indexed without changing consensus state.
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedMessageAddressIndex "
+							+ "ON ATRuntime (is_finished, sleep_until_message_timestamp, AT_address)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedHeightAddressIndex "
+							+ "ON ATRuntime (is_finished, sleep_until_height, AT_address)");
+					stmt.execute("CREATE INDEX IF NOT EXISTS ATNextIncomingHeightTimestampAddressIndex "
+							+ "ON ATNextIncoming (block_height, sleep_until_message_timestamp, AT_address)");
+
+					break;
+
 				default:
 					// nothing to do
 					return false;
@@ -1078,5 +1296,17 @@ public class HSQLDBDatabaseUpdates {
 		// database was updated
 		LOGGER.info(() -> String.format("HSQLDB repository updated to version %d", databaseVersion + 1));
 		return true;
+	}
+
+	private static boolean columnExists(Connection connection, String tableName, String columnName) throws SQLException {
+		try (PreparedStatement preparedStatement = connection.prepareStatement("SELECT TRUE FROM INFORMATION_SCHEMA.SYSTEM_COLUMNS "
+				+ "WHERE TABLE_NAME = ? AND COLUMN_NAME = ?")) {
+			preparedStatement.setString(1, tableName);
+			preparedStatement.setString(2, columnName);
+
+			try (ResultSet resultSet = preparedStatement.executeQuery()) {
+				return resultSet.next();
+			}
+		}
 	}
 }

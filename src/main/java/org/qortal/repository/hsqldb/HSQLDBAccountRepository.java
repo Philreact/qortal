@@ -607,6 +607,38 @@ public class HSQLDBAccountRepository implements AccountRepository {
 		}
 	}
 
+	@Override
+	public void reduceAssetBalances(List<AccountBalanceData> accountBalanceDeltas) throws DataException {
+		// Nothing to do?
+		if (accountBalanceDeltas == null || accountBalanceDeltas.isEmpty())
+			return;
+
+		List<Object[]> reduceBalanceParams = new ArrayList<>();
+
+		for (AccountBalanceData accountBalance : accountBalanceDeltas) {
+			long deltaBalance = accountBalance.getBalance();
+
+			if (deltaBalance == 0L)
+				continue;
+
+			if (deltaBalance > 0L)
+				throw new DataException("Refusing to reduce account balance using positive delta");
+
+			reduceBalanceParams.add(new Object[] { deltaBalance, accountBalance.getAddress(), accountBalance.getAssetId() });
+		}
+
+		if (reduceBalanceParams.isEmpty())
+			return;
+
+		String sql = "UPDATE AccountBalances set balance = balance + ? WHERE account = ? AND asset_id = ?";
+		try {
+			this.repository.executeCheckedBatchUpdate(sql, reduceBalanceParams);
+		} catch (SQLException e) {
+			throw new DataException("Unable to reduce account balances in repository", e);
+		}
+	}
+
+	@Override
 	public void modifyAssetBalances(List<AccountBalanceData> accountBalanceDeltas) throws DataException {
 		// Nothing to do?
 		if (accountBalanceDeltas == null || accountBalanceDeltas.isEmpty())

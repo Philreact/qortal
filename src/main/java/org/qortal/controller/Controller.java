@@ -439,10 +439,10 @@ public class Controller extends Thread {
 			RepositoryManager.setRepositoryFactory(repositoryFactory);
 			RepositoryManager.setRequestedCheckpoint(Boolean.TRUE);
 
-			try (final Repository repository = RepositoryManager.getRepository()) {
-				// RepositoryManager.rebuildTransactionSequences(repository);
-				ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
-			}
+			// try (final Repository repository = RepositoryManager.getRepository()) {
+			// 	// RepositoryManager.rebuildTransactionSequences(repository);
+			// 	ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
+			// }
 
 
 			if( Settings.getInstance().isDbCacheEnabled() ) {
@@ -527,13 +527,13 @@ public class Controller extends Thread {
 				Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
 				return;
 			}
-			if (ArbitraryDataCacheManager.getInstance().needsArbitraryResourcesCacheRebuild(repository)) {
-				// Don't allow the node to start if arbitrary resources cache hasn't been built yet
-				// This is needed to handle a case when bootstrapping
-				LOGGER.error("Database upgrade needed. Please restart the core to complete the upgrade process.");
-				Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
-				return;
-			}
+			// if (ArbitraryDataCacheManager.getInstance().needsArbitraryResourcesCacheRebuild(repository)) {
+			// 	// Don't allow the node to start if arbitrary resources cache hasn't been built yet
+			// 	// This is needed to handle a case when bootstrapping
+			// 	LOGGER.error("Database upgrade needed. Please restart the core to complete the upgrade process.");
+			// 	Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
+			// 	return;
+			// }
 		} catch (DataException e) {
 			LOGGER.error("Error checking transaction sequences in repository", e);
 			return;
@@ -569,6 +569,9 @@ public class Controller extends Thread {
 
 		LOGGER.info("Starting synchronizer");
 		Synchronizer.getInstance().start();
+
+		LOGGER.info("Starting thread CPU monitor");
+		ThreadCpuMonitor.getInstance().start();
 
 		LOGGER.info("Starting block minter");
 		blockMinter = new BlockMinter();
@@ -1207,6 +1210,9 @@ public class Controller extends Thread {
 					LOGGER.info("Shutting down auto-update");
 					AutoUpdate.getInstance().shutdown();
 				}
+
+				LOGGER.info("Shutting down thread CPU monitor");
+				ThreadCpuMonitor.getInstance().shutdown();
 
 			// Arbitrary data controllers
 			LOGGER.info("Shutting down arbitrary-transaction controllers");
