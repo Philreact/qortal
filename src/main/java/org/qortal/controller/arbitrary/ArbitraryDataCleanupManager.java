@@ -4,6 +4,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
+import org.qortal.controller.Synchronizer;
 import org.qortal.event.DataMonitorEvent;
 import org.qortal.event.EventBus;
 import org.qortal.repository.DataException;
@@ -36,10 +37,12 @@ public class ArbitraryDataCleanupManager extends Thread {
 	private static final List<TransactionType> ARBITRARY_TX_TYPE = Arrays.asList(TransactionType.ARBITRARY);
 	private static final String QORTAL_RAW_DATA_PREFIX = "qortalRawData";
 	private static final String QORTAL_TEMP_DIRECTORY_PREFIX = "qortal-";
+	private static final long STARTUP_SYNC_DEFER_GRACE_MS = 2 * 60 * 1000L;
 
 	private static ArbitraryDataCleanupManager instance;
 
 	private volatile boolean isStopping = false;
+	private volatile long startupSyncDeferUntil = 0L;
 
 	/**
 	 * The amount of time that must pass before a file is treated as stale / not recent.
@@ -82,21 +85,13 @@ public class ArbitraryDataCleanupManager extends Thread {
 	public void run() {
 		Thread.currentThread().setName("Arbitrary Data Cleanup Manager");
 		Thread.currentThread().setPriority(NORM_PRIORITY);
+		this.startupSyncDeferUntil = System.currentTimeMillis() + STARTUP_SYNC_DEFER_GRACE_MS;
 
 		// Paginate queries when fetching arbitrary transactions
 		final int limit = 100;
 		int offset = 0;
 
-		List<ArbitraryTransactionData> allArbitraryTransactionsInDescendingOrder;
-
-		try (final Repository repository = RepositoryManager.getRepository()) {
-			allArbitraryTransactionsInDescendingOrder
-					= repository.getArbitraryRepository()
-					.getLatestArbitraryTransactions();
-		} catch( Exception e) {
-			LOGGER.error(e.getMessage(), e);
-			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
-		}
+		List<ArbitraryTransactionData> allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
 
 		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
 
@@ -113,6 +108,11 @@ public class ArbitraryDataCleanupManager extends Thread {
 				Long now = NTP.getTime();
 				if (now == null) {
 					// Don't attempt to make decisions if we haven't synced our time yet
+					continue;
+				}
+
+				// Cleanup is background maintenance, so don't let it compete with sync attempts.
+				if (this.shouldDeferForSync()) {
 					continue;
 				}
 
@@ -133,6 +133,12 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 				// Any arbitrary transactions we want to fetch data for?
 				try (final Repository repository = RepositoryManager.getRepository()) {
+					if (allArbitraryTransactionsInDescendingOrder.isEmpty()) {
+						allArbitraryTransactionsInDescendingOrder
+								= repository.getArbitraryRepository()
+								.getLatestArbitraryTransactions();
+					}
+
 					List<ArbitraryTransactionData> transactions = allArbitraryTransactionsInDescendingOrder.stream().skip(offset).limit(limit).collect(Collectors.toList());
 					if (isStopping) {
 						return;
@@ -318,6 +324,14 @@ public class ArbitraryDataCleanupManager extends Thread {
 		} catch (InterruptedException e) {
 			// Fall-through to exit thread...
 		}
+	}
+
+	private boolean shouldDeferForSync() {
+		if (System.currentTimeMillis() < this.startupSyncDeferUntil)
+			return true;
+
+		Synchronizer synchronizer = Synchronizer.getInstance();
+		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}
 
 	public List<Path> findPathsWithNoAssociatedTransaction(Repository repository) {

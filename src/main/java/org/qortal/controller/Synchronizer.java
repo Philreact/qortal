@@ -87,7 +87,7 @@ public class Synchronizer extends Thread {
 	private volatile int blocksRemaining = 0;
 
 	private static volatile boolean requestSync = false;
-	private boolean syncRequestPending = false;
+	private volatile boolean syncRequestPending = false;
 
 	// Keep track of invalid blocks so that we don't keep trying to sync them
 	private Map<ByteArray, Long> invalidBlockSignatures = Collections.synchronizedMap(new HashMap<>());

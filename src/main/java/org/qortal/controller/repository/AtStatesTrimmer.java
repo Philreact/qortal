@@ -16,6 +16,7 @@ import static java.lang.Thread.MIN_PRIORITY;
 public class AtStatesTrimmer implements Runnable {
 
 	private static final Logger LOGGER = LogManager.getLogger(AtStatesTrimmer.class);
+	private static final long STARTUP_SYNC_DEFER_GRACE_MS = 2 * 60 * 1000L;
 
 	@Override
 	public void run() {
@@ -24,6 +25,18 @@ public class AtStatesTrimmer implements Runnable {
 		if (Settings.getInstance().isLite()) {
 			// Nothing to trim in lite mode
 			return;
+		}
+
+		final long startupSyncDeferUntil = System.currentTimeMillis() + STARTUP_SYNC_DEFER_GRACE_MS;
+		while (!Controller.isStopping() && this.shouldDeferForSync(startupSyncDeferUntil)) {
+			try {
+				Thread.sleep(Settings.getInstance().getAtStatesTrimInterval());
+			} catch (InterruptedException e) {
+				if (Controller.isStopping())
+					return;
+
+				LOGGER.warn("AT States Trimming startup defer interrupted. Trying again.", e);
+			}
 		}
 
 		int trimStartHeight;
@@ -52,8 +65,8 @@ public class AtStatesTrimmer implements Runnable {
 					if (chainTip == null || NTP.getTime() == null)
 						continue;
 
-					// Don't even attempt if we're mid-sync as our repository requests will be delayed for ages
-					if (Synchronizer.getInstance().isSynchronizing())
+					// Don't even attempt around sync as our repository requests will be delayed for ages.
+					if (this.shouldDeferForSync(startupSyncDeferUntil))
 						continue;
 
 					long currentTrimmableTimestamp = NTP.getTime() - Settings.getInstance().getAtStatesMaxLifetime();
@@ -104,6 +117,14 @@ public class AtStatesTrimmer implements Runnable {
 				LOGGER.error("AT States Trimming is not working! Not trying again. Restart ASAP. Report this error immediately to the developers.", e);
 			}
 		}
+	}
+
+	private boolean shouldDeferForSync(long startupSyncDeferUntil) {
+		if (System.currentTimeMillis() < startupSyncDeferUntil)
+			return true;
+
+		Synchronizer synchronizer = Synchronizer.getInstance();
+		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}
 
 }

@@ -24,6 +24,7 @@ import org.qortal.arbitrary.ArbitraryDataResource;
 import org.qortal.arbitrary.metadata.ArbitraryDataTransactionMetadata;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.controller.Controller;
+import org.qortal.controller.Synchronizer;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.event.DataMonitorEvent;
@@ -86,11 +87,13 @@ public class ArbitraryDataManager extends Thread {
 
 	private long lastCacheCleanupTime = 0L;
 	private static long CACHE_CLEANUP_INTERVAL = 1 * 60 * 1000L; // Clean up once per minute
+	private static final long STARTUP_SYNC_DEFER_GRACE_MS = 2 * 60 * 1000L;
 
 	private static ArbitraryDataManager instance;
 	private final Object peerDataLock = new Object();
 
 	private volatile boolean isStopping = false;
+	private volatile long startupSyncDeferUntil = 0L;
 
 	/**
 	 * Map to keep track of cached arbitrary transaction resources.
@@ -120,6 +123,7 @@ public class ArbitraryDataManager extends Thread {
 	public void run() {
 		Thread.currentThread().setName("Arbitrary Data Manager");
 		Thread.currentThread().setPriority(NORM_PRIORITY);
+		this.startupSyncDeferUntil = System.currentTimeMillis() + STARTUP_SYNC_DEFER_GRACE_MS;
 
 		// Create data directory in case it doesn't exist yet
 		this.createDataDirectory();
@@ -142,6 +146,10 @@ public class ArbitraryDataManager extends Thread {
 
 				Long now = NTP.getTime();
 				if (now == null) {
+					continue;
+				}
+
+				if (this.shouldDeferForSync()) {
 					continue;
 				}
 
@@ -209,6 +217,14 @@ public class ArbitraryDataManager extends Thread {
 		this.interrupt();
 	}
 
+	private boolean shouldDeferForSync() {
+		if (System.currentTimeMillis() < this.startupSyncDeferUntil)
+			return true;
+
+		Synchronizer synchronizer = Synchronizer.getInstance();
+		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
+	}
+
 	private void processNames() throws InterruptedException {
 		// Fetch latest list of followed names
 		List<String> followedNames = ListUtils.followedNames();
@@ -218,6 +234,10 @@ public class ArbitraryDataManager extends Thread {
 
 		// Loop through the names in the list and fetch transactions for each
 		for (String name : followedNames) {
+			if (this.shouldDeferForSync()) {
+				return;
+			}
+
 			this.fetchAndProcessTransactions(name);
 		}
 	}
@@ -232,6 +252,10 @@ public class ArbitraryDataManager extends Thread {
 		// Paginate queries when fetching arbitrary transactions
 		final int limit = 100;
 		int offset = 0;
+
+		if (this.shouldDeferForSync()) {
+			return;
+		}
 
 		List<ArbitraryTransactionDataHashWrapper> allArbitraryTransactionsInDescendingOrder;
 
@@ -264,6 +288,10 @@ public class ArbitraryDataManager extends Thread {
 
 		while (!isStopping) {
 			Thread.sleep(1000L);
+
+			if (this.shouldDeferForSync()) {
+				return;
+			}
 
 			// Any arbitrary transactions we want to fetch data for?
 			List<DataMonitorEvent> pendingEvents = new ArrayList<>();
@@ -406,6 +434,10 @@ public class ArbitraryDataManager extends Thread {
 		final int limit = 100;
 		int offset = 0;
 
+		if (this.shouldDeferForSync()) {
+			return;
+		}
+
 		List<ArbitraryTransactionDataHashWrapper> allArbitraryTransactionsInDescendingOrder;
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
@@ -425,6 +457,10 @@ public class ArbitraryDataManager extends Thread {
 			final int maxSeconds = 10;
 			final int randomSleepTime = new Random().nextInt((maxSeconds - minSeconds + 1)) + minSeconds;
 			Thread.sleep(randomSleepTime * 1000L);
+
+			if (this.shouldDeferForSync()) {
+				return;
+			}
 
 			// Any arbitrary transactions we want to fetch data for?
 			DataMonitorEvent pendingEvent = null;
@@ -537,6 +573,9 @@ public class ArbitraryDataManager extends Thread {
 		if (!Settings.getInstance().isQdnEnabled()) {
 			return;
 		}
+		if (this.shouldDeferForSync()) {
+			return;
+		}
 		List<Peer> peers = NetworkData.getInstance().getImmutableHandshakedPeers().stream()
 				.collect(Collectors.toList());
 		peers.removeIf(Controller.hasMisbehaved);
@@ -554,6 +593,7 @@ public class ArbitraryDataManager extends Thread {
 			// Results are ordered by created_when DESC, so first occurrence of each resource key is the most recent
 			Set<String> seenResources = new HashSet<>();
 			for (ArbitraryTransactionData txData : recent) {
+				if (this.shouldDeferForSync()) break;
 				if (isStopping) break;
 				try {
 					if (txData.getMetadataHash() == null) continue;
@@ -579,7 +619,7 @@ public class ArbitraryDataManager extends Thread {
 
 
 		for (ArbitraryTransactionData txData : candidates) {
-			if (isStopping || System.currentTimeMillis() >= deadline) break;
+			if (isStopping || this.shouldDeferForSync() || System.currentTimeMillis() >= deadline) break;
 
 			Thread.sleep(200L);
 

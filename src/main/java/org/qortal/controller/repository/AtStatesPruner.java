@@ -16,6 +16,7 @@ import static java.lang.Thread.MIN_PRIORITY;
 public class AtStatesPruner implements Runnable {
 
 	private static final Logger LOGGER = LogManager.getLogger(AtStatesPruner.class);
+	private static final long STARTUP_SYNC_DEFER_GRACE_MS = 2 * 60 * 1000L;
 
 	@Override
 	public void run() {
@@ -36,6 +37,18 @@ public class AtStatesPruner implements Runnable {
 			else {
 				// We're allowed to prune blocks that have already been archived
 				archiveMode = true;
+			}
+		}
+
+		final long startupSyncDeferUntil = System.currentTimeMillis() + STARTUP_SYNC_DEFER_GRACE_MS;
+		while (!Controller.isStopping() && this.shouldDeferForSync(startupSyncDeferUntil)) {
+			try {
+				Thread.sleep(Settings.getInstance().getAtStatesPruneInterval());
+			} catch (InterruptedException e) {
+				if (Controller.isStopping())
+					return;
+
+				LOGGER.warn("AT States Pruning startup defer interrupted. Trying again.", e);
 			}
 		}
 
@@ -66,8 +79,8 @@ public class AtStatesPruner implements Runnable {
 					if (chainTip == null || NTP.getTime() == null)
 						continue;
 
-					// Don't even attempt if we're mid-sync as our repository requests will be delayed for ages
-					if (Synchronizer.getInstance().isSynchronizing())
+					// Don't even attempt around sync as our repository requests will be delayed for ages.
+					if (this.shouldDeferForSync(startupSyncDeferUntil))
 						continue;
 
 					// Prune AT states for all blocks up until our latest minus pruneBlockLimit
@@ -131,5 +144,13 @@ public class AtStatesPruner implements Runnable {
 				LOGGER.error("AT States Pruning is not working! Not trying again. Restart ASAP. Report this error immediately to the developers.", e);
 			}
 		}
+	}
+
+	private boolean shouldDeferForSync(long startupSyncDeferUntil) {
+		if (System.currentTimeMillis() < startupSyncDeferUntil)
+			return true;
+
+		Synchronizer synchronizer = Synchronizer.getInstance();
+		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}
 }

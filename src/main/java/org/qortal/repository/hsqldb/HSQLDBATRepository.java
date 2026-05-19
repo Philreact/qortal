@@ -1166,12 +1166,11 @@ public class HSQLDBATRepository implements ATRepository {
 
 	@Override
 	public void revertCurrentATState(String atAddress) throws DataException {
-		String sql = "SELECT MAX(height) "
+		String sql = "SELECT height "
 				+ "FROM ATStates "
-				+ "LEFT OUTER JOIN ATStateBlobs USING (state_hash) "
-				+ "LEFT OUTER JOIN ATStatesData USING (AT_address, height) "
 				+ "WHERE ATStates.AT_address = ? "
-				+ "AND (ATStateBlobs.state_hash IS NOT NULL OR ATStatesData.AT_address IS NOT NULL)";
+				+ "ORDER BY ATStates.AT_address DESC, ATStates.height DESC "
+				+ "LIMIT 1";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql, atAddress)) {
 			Integer height = null;
@@ -1189,6 +1188,63 @@ public class HSQLDBATRepository implements ATRepository {
 			}
 		} catch (SQLException e) {
 			throw new DataException("Unable to recompute AT current state pointer", e);
+		}
+	}
+
+	private void setCurrentATStateFromPreviousHeight(String atAddress, Integer previousHeight, boolean isInitial) throws DataException, SQLException {
+		if (previousHeight != null) {
+			updateCurrentATState(atAddress, previousHeight);
+			return;
+		}
+
+		if (isInitial) {
+			this.repository.delete("ATCurrentState", "AT_address = ?", atAddress);
+			setCurrentStateHeight(atAddress, null);
+			return;
+		}
+
+		LOGGER.warn("Falling back to historical AT current-state scan for {} because deleted state row has no previous_height", atAddress);
+		revertCurrentATState(atAddress);
+	}
+
+	private DeletedATStatePointerInfo fetchDeletedATStatePointerInfo(String atAddress, int height) throws DataException {
+		String sql = "SELECT previous_height, is_initial, "
+				+ "(SELECT MAX(pointer_height) FROM ("
+				+ "SELECT current_state_height AS pointer_height FROM ATRuntime WHERE AT_address = ? AND current_state_height IS NOT NULL "
+				+ "UNION ALL "
+				+ "SELECT current_state_height AS pointer_height FROM ATs WHERE AT_address = ? AND current_state_height IS NOT NULL "
+				+ "UNION ALL "
+				+ "SELECT height AS pointer_height FROM ATCurrentState WHERE AT_address = ?"
+				+ ") AS CurrentPointers) AS current_height "
+				+ "FROM ATStates WHERE AT_address = ? AND height = ?";
+
+		try (ResultSet resultSet = this.repository.checkedExecute(sql, atAddress, atAddress, atAddress, atAddress, height)) {
+			if (resultSet == null)
+				return null;
+
+			Integer previousHeight = resultSet.getInt(1);
+			if (previousHeight == 0 && resultSet.wasNull())
+				previousHeight = null;
+
+			Integer currentHeight = resultSet.getInt(3);
+			if (currentHeight == 0 && resultSet.wasNull())
+				currentHeight = null;
+
+			return new DeletedATStatePointerInfo(previousHeight, resultSet.getBoolean(2), currentHeight);
+		} catch (SQLException e) {
+			throw new DataException("Unable to fetch deleted AT state pointer info", e);
+		}
+	}
+
+	private static class DeletedATStatePointerInfo {
+		private final Integer previousHeight;
+		private final boolean isInitial;
+		private final Integer currentHeight;
+
+		private DeletedATStatePointerInfo(Integer previousHeight, boolean isInitial, Integer currentHeight) {
+			this.previousHeight = previousHeight;
+			this.isInitial = isInitial;
+			this.currentHeight = currentHeight;
 		}
 	}
 
@@ -2187,10 +2243,18 @@ public class HSQLDBATRepository implements ATRepository {
 
 	@Override
 	public void delete(String atAddress, int height) throws DataException {
+		DeletedATStatePointerInfo pointerInfo = fetchDeletedATStatePointerInfo(atAddress, height);
+
 		try {
 			this.repository.delete("ATStates", "AT_address = ? AND height = ?", atAddress, height);
 			this.repository.delete("ATStatesData", "AT_address = ? AND height = ?", atAddress, height);
-			revertCurrentATState(atAddress);
+
+			if (pointerInfo == null)
+				revertCurrentATState(atAddress);
+			else if (pointerInfo.currentHeight != null && pointerInfo.currentHeight > height)
+				return;
+			else
+				setCurrentATStateFromPreviousHeight(atAddress, pointerInfo.previousHeight, pointerInfo.isInitial);
 		} catch (SQLException e) {
 			throw new DataException("Unable to delete AT state from repository", e);
 		}

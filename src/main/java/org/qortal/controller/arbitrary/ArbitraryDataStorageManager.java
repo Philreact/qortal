@@ -1,8 +1,8 @@
 package org.qortal.controller.arbitrary;
 
-import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.qortal.controller.Synchronizer;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.repository.DataException;
@@ -13,11 +13,16 @@ import org.qortal.utils.*;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.FileVisitOption;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -46,6 +51,8 @@ public class ArbitraryDataStorageManager extends Thread {
     private String searchQuery;
 
     private static final long DIRECTORY_SIZE_CHECK_INTERVAL = 10 * 60 * 1000L; // 10 minutes
+    private static final long STARTUP_SYNC_DEFER_GRACE_MS = 2 * 60 * 1000L;
+    private volatile long startupSyncDeferUntil = 0L;
 
     /** Treat storage as full at 80% usage, to reduce risk of going over the limit.
      * This is necessary because we don't calculate total storage values before every write.
@@ -73,6 +80,7 @@ public class ArbitraryDataStorageManager extends Thread {
     public void run() {
         Thread.currentThread().setName("Arbitrary Data Storage Manager");
         Thread.currentThread().setPriority(NORM_PRIORITY);
+        this.startupSyncDeferUntil = System.currentTimeMillis() + STARTUP_SYNC_DEFER_GRACE_MS;
 
         try {
             while (!isStopping) {
@@ -90,6 +98,11 @@ public class ArbitraryDataStorageManager extends Thread {
                         continue;
                     }
 
+                    // Storage sizing can walk a large QDN data tree, so defer it around sync attempts.
+                    if (this.shouldDeferForSync()) {
+                        continue;
+                    }
+
                     // Check the total directory size if we haven't in a while
                     if (this.shouldCalculateDirectorySize(now)) {
                         this.calculateDirectorySize(now);
@@ -103,6 +116,14 @@ public class ArbitraryDataStorageManager extends Thread {
         } catch (InterruptedException e) {
             // Fall-through to exit thread...
         }
+    }
+
+    private boolean shouldDeferForSync() {
+        if (System.currentTimeMillis() < this.startupSyncDeferUntil)
+            return true;
+
+        Synchronizer synchronizer = Synchronizer.getInstance();
+        return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
     }
 
     public void shutdown() {
@@ -424,21 +445,34 @@ public class ArbitraryDataStorageManager extends Thread {
                 return;
             }
 
-            // Calculate total size of data directory
-            LOGGER.trace("Calculating data directory size...");
+            long scanStartNanos = System.nanoTime();
+            DirectorySizeResult dataDirectorySize = DirectorySizeResult.EMPTY;
+            DirectorySizeResult tempDirectorySize = DirectorySizeResult.EMPTY;
+
             Path dataDirectoryPath = Paths.get(Settings.getInstance().getDataPath());
-            if (dataDirectoryPath.toFile().exists()) {
-                totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
+            if (Files.exists(dataDirectoryPath)) {
+                LOGGER.trace("Calculating data directory size...");
+                dataDirectorySize = this.directorySize(dataDirectoryPath);
+                totalSize += dataDirectorySize.size;
             }
 
             // Add total size of temp directory, if it's not already inside the data directory
             Path tempDirectoryPath = Paths.get(Settings.getInstance().getTempDataPath());
-            if (tempDirectoryPath.toFile().exists()) {
+            if (Files.exists(tempDirectoryPath)) {
                 if (!FilesystemUtils.isChild(tempDirectoryPath, dataDirectoryPath)) {
                     LOGGER.trace("Calculating temp directory size...");
-                    totalSize += FileUtils.sizeOfDirectory(dataDirectoryPath.toFile());
+                    tempDirectorySize = this.directorySize(tempDirectoryPath);
+                    totalSize += tempDirectorySize.size;
                 }
             }
+
+            LOGGER.info("QDN storage size scan completed in {} ms: dataFiles={}, dataDirs={}, tempFiles={}, tempDirs={}, totalBytes={}",
+                    (System.nanoTime() - scanStartNanos) / 1_000_000L,
+                    dataDirectorySize.files,
+                    dataDirectorySize.directories,
+                    tempDirectorySize.files,
+                    tempDirectorySize.directories,
+                    totalSize);
 
             this.totalDirectorySize = totalSize;
             this.lastDirectorySizeCheck = now;
@@ -459,6 +493,40 @@ public class ArbitraryDataStorageManager extends Thread {
         }
 
         LOGGER.info("Total used: {} bytes, Total capacity: {} bytes", this.totalDirectorySize, this.storageCapacity);
+    }
+
+    private DirectorySizeResult directorySize(Path path) throws IOException {
+        DirectorySizeResult result = new DirectorySizeResult();
+
+        Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                result.directories++;
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                result.files++;
+                result.size += attrs.size();
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) {
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        return result;
+    }
+
+    private static class DirectorySizeResult {
+        private static final DirectorySizeResult EMPTY = new DirectorySizeResult();
+
+        private long size;
+        private long files;
+        private long directories;
     }
 
     private long getRemainingUsableStorageCapacity() throws IOException {
