@@ -38,6 +38,8 @@ public class ArbitraryDataCacheManager extends Thread {
     private static ArbitraryDataCacheManager instance;
     private volatile boolean isStopping = false;
 
+    private static final int ARBITRARY_RESOURCES_CACHE_BUILD_VERSION = 1;
+
     /** Queue of arbitrary transactions that require cache updates */
     private final List<ArbitraryTransactionData> updateQueue = Collections.synchronizedList(new ArrayList<>());
 
@@ -289,11 +291,17 @@ public class ArbitraryDataCacheManager extends Thread {
     }
 
     public boolean needsArbitraryResourcesCacheRebuild(Repository repository) throws DataException {
+        if (isArbitraryResourcesCacheBuilt(repository)) {
+            LOGGER.debug("Arbitrary resources cache already built");
+            return false;
+        }
+
         // Check if we have an entry in the cache for the oldest ARBITRARY transaction with a name
         List<ArbitraryTransactionData> oldestCacheableTransactions = repository.getArbitraryRepository().getArbitraryTransactions(true, 1, 0, false);
         if (oldestCacheableTransactions == null || oldestCacheableTransactions.isEmpty()) {
             // No relevant arbitrary transactions yet on this chain
             LOGGER.debug("No relevant arbitrary transactions exist to build cache from");
+            markArbitraryResourcesCacheBuilt(repository);
             return false;
         }
         // We have an arbitrary transaction, so check if it's in the cache
@@ -304,10 +312,38 @@ public class ArbitraryDataCacheManager extends Thread {
             // We avoid checkpointing and prevent the node from starting up in the case of a rebuild failure, so
             // we shouldn't ever be left in a partially rebuilt state.
             LOGGER.debug("Arbitrary resources cache already built");
+            markArbitraryResourcesCacheBuilt(repository);
             return false;
         }
 
         return true;
+    }
+
+    private boolean isArbitraryResourcesCacheBuilt(Repository repository) throws DataException {
+        String sql = "SELECT arbitrary_resources_cache_build_version FROM DatabaseInfo "
+                + "WHERE arbitrary_resources_cache_build_version >= ?";
+
+        try (PreparedStatement preparedStatement = repository.getConnection().prepareStatement(sql)) {
+            preparedStatement.setInt(1, ARBITRARY_RESOURCES_CACHE_BUILD_VERSION);
+
+            try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                return resultSet.next();
+            }
+        } catch (SQLException e) {
+            throw new DataException("Unable to check arbitrary resources cache build version", e);
+        }
+    }
+
+    private void markArbitraryResourcesCacheBuilt(Repository repository) throws DataException {
+        String sql = "UPDATE DatabaseInfo SET arbitrary_resources_cache_build_version = ?";
+
+        try (PreparedStatement preparedStatement = repository.getConnection().prepareStatement(sql)) {
+            preparedStatement.setInt(1, ARBITRARY_RESOURCES_CACHE_BUILD_VERSION);
+            preparedStatement.executeUpdate();
+            repository.saveChangesAndCheckpoint();
+        } catch (SQLException e) {
+            throw new DataException("Unable to update arbitrary resources cache build version", e);
+        }
     }
 
     public boolean buildArbitraryResourcesCache(Repository repository, boolean forceRebuild) throws DataException {
@@ -392,6 +428,7 @@ public class ArbitraryDataCacheManager extends Thread {
 
             // Now refresh all statuses
             refreshArbitraryStatuses(repository);
+            markArbitraryResourcesCacheBuilt(repository);
 
             LOGGER.info("Completed build of arbitrary resources cache.");
             return true;

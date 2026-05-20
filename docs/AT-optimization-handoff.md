@@ -770,7 +770,20 @@ Once the branch has enough test/live confidence:
    - `ATExecutionQueue`
    - `ATStateBlobs`
 4. Add bootstrap validation for blob/state hash resolution.
-5. Consider blob garbage collection only as background maintenance, never in block/orphan hot paths.
+5. Add `ATStateBlobs` garbage collection as background maintenance, never in block/orphan hot paths.
+   Extra unreferenced blobs are safe and only cost disk space; missing referenced blobs are unsafe because retained AT state rows must always resolve their `state_hash`.
+   The cleanup shape should be:
+
+   ```sql
+   DELETE FROM ATStateBlobs
+   WHERE NOT EXISTS (
+     SELECT 1
+     FROM ATStates
+     WHERE ATStates.state_hash = ATStateBlobs.state_hash
+   )
+   ```
+
+   If delta/checkpoint storage is added later, this rule must also protect any blob that is still needed by a retained delta chain.
 6. Revisit delta/checkpoint storage only after measuring duplicate blob rate and changed-byte rate.
 
 ## Main Files To Review

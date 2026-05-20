@@ -13,7 +13,11 @@ import org.qortal.settings.Settings;
 import org.qortal.transaction.Transaction;
 import org.qortal.transform.block.BlockTransformation;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -22,6 +26,8 @@ import static org.qortal.transaction.Transaction.TransactionType.AT;
 
 public abstract class RepositoryManager {
 	private static final Logger LOGGER = LogManager.getLogger(RepositoryManager.class);
+
+	private static final int AT_DERIVED_CACHES_BUILD_VERSION = 1;
 
 	private static RepositoryFactory repositoryFactory = null;
 
@@ -225,6 +231,112 @@ public abstract class RepositoryManager {
 			// Throw an exception so that the node startup is halted, allowing for a retry next time.
 			repository.discardChanges();
 			throw new DataException("Rebuild of transaction sequences failed.");
+		}
+	}
+
+	public static void populateATDerivedCachesIfNecessary(Repository repository) throws DataException {
+		if (Settings.getInstance().isLite())
+			return;
+
+		Connection connection = repository.getConnection();
+
+		try {
+			int databaseVersion = org.qortal.repository.hsqldb.HSQLDBDatabaseUpdates.fetchDatabaseVersion(connection);
+
+			if (databaseVersion <= 52 || isATDerivedCachesPopulated(connection))
+				return;
+
+			SplashFrame.getInstance().updateStatus("Rebuilding AT indexes - please wait...");
+			LOGGER.info("Rebuilding AT derived caches after database upgrade...");
+
+			boolean autoCommit = connection.getAutoCommit();
+			connection.setAutoCommit(false);
+
+			try (Statement stmt = connection.createStatement()) {
+				// ATStateBlobs is content-addressed, so duplicate state hashes are inserted once and shared by all
+				// ATStates rows. The existing repository helper performs hash de-duplication safely during rollout.
+				repository.getATRepository().rebuildATStateBlobs();
+
+				// Rebuild the current-state pointer before ATRuntime so the runtime rows inherit the latest state height.
+				repository.getATRepository().rebuildATCurrentStates();
+
+				stmt.execute("DELETE FROM ATRuntime");
+				stmt.execute("INSERT INTO ATRuntime (AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
+						+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height) "
+						+ "SELECT ATs.AT_address, ATs.is_sleeping, ATs.sleep_until_height, ATs.is_finished, ATs.had_fatal_error, "
+						+ "ATs.is_frozen, ATs.frozen_balance, ATs.sleep_until_message_timestamp, "
+						+ "CASE "
+							+ "WHEN ATCurrentState.height IS NOT NULL "
+								+ "AND (ATs.current_state_height IS NULL OR ATCurrentState.height >= ATs.current_state_height) "
+								+ "THEN ATCurrentState.height "
+							+ "ELSE ATs.current_state_height "
+						+ "END "
+						+ "FROM ATs "
+						+ "LEFT OUTER JOIN ATCurrentState ON ATCurrentState.AT_address = ATs.AT_address");
+
+				repository.getATRepository().rebuildATIncomingTransactions();
+				repository.getATRepository().rebuildATNextIncoming();
+
+				stmt.execute("DELETE FROM ATExecutionQueue");
+				stmt.execute("INSERT INTO ATExecutionQueue (AT_address, next_height) "
+						+ "SELECT ATRuntime.AT_address, "
+						+ "CASE "
+							+ "WHEN ATRuntime.sleep_until_message_timestamp IS NULL THEN 0 "
+							+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
+								+ "AND ATRuntime.sleep_until_height != 0 "
+								+ "AND ATNextIncoming.block_height IS NOT NULL "
+								+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
+								+ "THEN CASE "
+									+ "WHEN ATRuntime.sleep_until_height <= ATNextIncoming.block_height + 1 "
+										+ "THEN ATRuntime.sleep_until_height "
+									+ "ELSE ATNextIncoming.block_height + 1 "
+								+ "END "
+							+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
+								+ "AND ATRuntime.sleep_until_height != 0 "
+								+ "THEN ATRuntime.sleep_until_height "
+							+ "WHEN ATNextIncoming.block_height IS NOT NULL "
+								+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
+								+ "THEN ATNextIncoming.block_height + 1 "
+						+ "END "
+						+ "FROM ATRuntime "
+						+ "LEFT OUTER JOIN ATNextIncoming ON ATNextIncoming.AT_address = ATRuntime.AT_address "
+						+ "WHERE ATRuntime.is_finished = false "
+						+ "AND (ATRuntime.sleep_until_message_timestamp IS NULL "
+							+ "OR (ATRuntime.sleep_until_height IS NOT NULL AND ATRuntime.sleep_until_height != 0) "
+							+ "OR (ATNextIncoming.block_height IS NOT NULL "
+								+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp))");
+
+				try (PreparedStatement updateFlagStatement = connection.prepareStatement(
+						"UPDATE DatabaseInfo SET at_derived_caches_build_version = ?")) {
+					updateFlagStatement.setInt(1, AT_DERIVED_CACHES_BUILD_VERSION);
+					updateFlagStatement.executeUpdate();
+				}
+
+				connection.commit();
+				connection.setAutoCommit(autoCommit);
+			} catch (SQLException | DataException e) {
+				connection.rollback();
+				connection.setAutoCommit(autoCommit);
+				throw e;
+			}
+
+			LOGGER.info("Completed AT derived cache rebuild.");
+		} catch (SQLException e) {
+			throw new DataException("Unable to populate AT derived caches", e);
+		} finally {
+			SplashFrame.getInstance().updateStatus("Proceeding to Start Qortal ...");
+		}
+	}
+
+	private static boolean isATDerivedCachesPopulated(Connection connection) throws SQLException {
+		String sql = "SELECT at_derived_caches_build_version FROM DatabaseInfo WHERE at_derived_caches_build_version >= ?";
+
+		try (PreparedStatement preparedStatement = connection.prepareStatement(sql)) {
+			preparedStatement.setInt(1, AT_DERIVED_CACHES_BUILD_VERSION);
+
+			try (ResultSet resultSet = preparedStatement.executeQuery()) {
+				return resultSet.next();
+			}
 		}
 	}
 

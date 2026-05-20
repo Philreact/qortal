@@ -50,6 +50,7 @@ import org.qortal.transaction.ChatTransaction;
 import org.qortal.transaction.Transaction;
 import org.qortal.transaction.Transaction.TransactionType;
 import org.qortal.transform.TransformationException;
+import org.qortal.transform.block.BlockTransformation;
 import org.qortal.utils.*;
 
 import javax.xml.bind.annotation.XmlAccessType;
@@ -100,6 +101,7 @@ public class Controller extends Thread {
 	private static final Logger LOGGER = LogManager.getLogger(Controller.class);
 	public static final long MISBEHAVIOUR_COOLOFF = 10 * 60 * 1000L; // ms
 	private static final int MAX_BLOCKCHAIN_TIP_AGE = 5; // blocks
+	private static final int MAX_ARCHIVED_BLOCKS_PER_GET_BLOCKS_RESPONSE = 20;
 	private static final Object shutdownLock = new Object();
 	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
 	private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
@@ -439,10 +441,10 @@ public class Controller extends Thread {
 			RepositoryManager.setRepositoryFactory(repositoryFactory);
 			RepositoryManager.setRequestedCheckpoint(Boolean.TRUE);
 
-			// try (final Repository repository = RepositoryManager.getRepository()) {
-			// 	// RepositoryManager.rebuildTransactionSequences(repository);
-			// 	ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
-			// }
+			try (final Repository repository = RepositoryManager.getRepository()) {
+				// RepositoryManager.rebuildTransactionSequences(repository);
+				ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
+			}
 
 
 			if( Settings.getInstance().isDbCacheEnabled() ) {
@@ -527,13 +529,15 @@ public class Controller extends Thread {
 				Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
 				return;
 			}
-			// if (ArbitraryDataCacheManager.getInstance().needsArbitraryResourcesCacheRebuild(repository)) {
-			// 	// Don't allow the node to start if arbitrary resources cache hasn't been built yet
-			// 	// This is needed to handle a case when bootstrapping
-			// 	LOGGER.error("Database upgrade needed. Please restart the core to complete the upgrade process.");
-			// 	Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
-			// 	return;
-			// }
+			RepositoryManager.populateATDerivedCachesIfNecessary(repository);
+
+			if (ArbitraryDataCacheManager.getInstance().needsArbitraryResourcesCacheRebuild(repository)) {
+				// Don't allow the node to start if arbitrary resources cache hasn't been built yet
+				// This is needed to handle a case when bootstrapping
+				LOGGER.error("Database upgrade needed. Please restart the core to complete the upgrade process.");
+				Gui.getInstance().fatalError("Database upgrade needed", "Please restart the core to complete the upgrade process.");
+				return;
+			}
 		} catch (DataException e) {
 			LOGGER.error("Error checking transaction sequences in repository", e);
 			return;
@@ -1910,16 +1914,26 @@ public class Controller extends Thread {
             int numberRequested = Math.min(blockLimitPerRequest, getBlocksMessage.getNumberRequested());
 
             List<Block> blocks = new ArrayList<>();
-            BlockData blockData = repository.getBlockRepository().fromReference(parentSignature);
+            byte[] previousSignature = parentSignature;
 
-            while (blockData != null && blocks.size() < numberRequested) {
+            while (blocks.size() < numberRequested) {
+                FastSyncBlockResult blockResult = this.fetchNextBlockForFastSync(repository, previousSignature);
+                if (blockResult == null)
+                    break;
+
+                if (blockResult.fromArchive && blocks.size() >= MAX_ARCHIVED_BLOCKS_PER_GET_BLOCKS_RESPONSE)
+                    break;
+
+                Block block = blockResult.block;
+                BlockData blockData = block.getBlockData();
+
                 // If we're dealing with untrimmed blocks, ensure we don't go above the untrimmedBlockLimitPerRequest
                 if (blockData.isTrimmed() == false && blocks.size() >= untrimmedBlockLimitPerRequest) {
                     break;
                 }
-                Block block = new Block(repository, blockData);
+
                 blocks.add(block);
-                blockData = repository.getBlockRepository().fromReference(blockData.getSignature());
+                previousSignature = blockData.getSignature();
             }
 
             Message blocksMessage = new BlocksMessage(blocks);
@@ -1936,6 +1950,39 @@ public class Controller extends Thread {
             LOGGER.error(String.format("Repository issue while sending blocks after %s to peer %s", Base58.encode(parentSignature), peer), e);
         }
     }
+
+	private static class FastSyncBlockResult {
+		private final Block block;
+		private final boolean fromArchive;
+
+		private FastSyncBlockResult(Block block, boolean fromArchive) {
+			this.block = block;
+			this.fromArchive = fromArchive;
+		}
+	}
+
+	private FastSyncBlockResult fetchNextBlockForFastSync(Repository repository, byte[] parentSignature) throws DataException {
+		BlockData blockData = repository.getBlockRepository().fromReference(parentSignature);
+		if (blockData != null) {
+			if (!PruneManager.getInstance().isBlockPruned(blockData.getHeight()))
+				return new FastSyncBlockResult(new Block(repository, blockData), false);
+
+			LOGGER.trace("Live block after parent {} is pruned, trying archive", Base58.encode(parentSignature));
+		}
+
+		blockData = repository.getBlockArchiveRepository().fromReference(parentSignature);
+		if (blockData == null)
+			return null;
+
+		BlockTransformation blockTransformation = BlockArchiveReader.getInstance().fetchBlockAtHeight(blockData.getHeight());
+		if (blockTransformation == null || blockTransformation.getBlockData() == null)
+			return null;
+
+		if (blockTransformation.getAtStatesHash() != null)
+			return new FastSyncBlockResult(new Block(repository, blockTransformation.getBlockData(), blockTransformation.getTransactions(), blockTransformation.getAtStatesHash()), true);
+
+		return new FastSyncBlockResult(new Block(repository, blockTransformation.getBlockData(), blockTransformation.getTransactions(), blockTransformation.getAtStates()), true);
+	}
 
 	private void onNetworkGetBlockSummariesMessage(Peer peer, Message message) {
 		GetBlockSummariesMessage getBlockSummariesMessage = (GetBlockSummariesMessage) message;

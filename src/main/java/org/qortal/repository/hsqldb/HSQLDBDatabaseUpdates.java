@@ -1072,211 +1072,74 @@ public class HSQLDBDatabaseUpdates {
 
 				case 52:
 
-					// Compatibility placeholder.
-					// Some local databases already ran an earlier experimental case 52 and advanced to version 53.
-					// The actual AT incoming cursor migration lives in case 53 so those databases still receive it.
-					break;
+					// AT execution performance schema. These tables/columns are either canonical metadata
+					// extensions or rebuildable acceleration structures; their data is populated after startup/bootstrap
+					// by repository code so schema migration never scans historical chain data.
+					stmt.execute("ALTER TABLE DatabaseInfo ADD at_derived_caches_build_version INT NOT NULL DEFAULT 0");
+					stmt.execute("ALTER TABLE ATStates ADD previous_height INTEGER");
+					stmt.execute("ALTER TABLE ATs ADD current_state_height INTEGER");
 
-				case 53:
-
-					// Drop failed experimental AT recipient table if it exists in local databases.
-					stmt.execute("DROP TABLE IF EXISTS ATRecipientTransactions");
-
-					// Derived/rebuildable inbox of confirmed transactions addressed to existing ATs.
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATIncomingTransactions ("
+					// Confirmed transactions addressed to ATs, used as a rebuildable inbox for AT message wakeups.
+					stmt.execute("CREATE TABLE ATIncomingTransactions ("
 							+ "AT_address QortalAddress NOT NULL, block_height INTEGER NOT NULL, block_sequence INTEGER NOT NULL, signature Signature NOT NULL, "
 							+ "PRIMARY KEY (AT_address, block_height, block_sequence, signature))");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATIncomingTransactionsSignatureIndex ON ATIncomingTransactions (signature)");
+					stmt.execute("CREATE INDEX ATIncomingTransactionsSignatureIndex ON ATIncomingTransactions (signature)");
+					stmt.execute("CREATE INDEX ATIncomingTransactionsBlockHeightIndex ON ATIncomingTransactions (block_height, AT_address)");
 
-					// Derived/rebuildable cursor. Nullable target columns mean the AT is sleeping but has no next incoming transaction.
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATNextIncoming ("
+					// Cached next incoming transaction per sleeping AT. Missing rows are rebuilt from canonical tables.
+					stmt.execute("CREATE TABLE ATNextIncoming ("
 							+ "AT_address QortalAddress NOT NULL, sleep_until_message_timestamp BIGINT NOT NULL, "
 							+ "block_height INTEGER, block_sequence INTEGER, signature Signature, "
 							+ "PRIMARY KEY (AT_address))");
+					stmt.execute("CREATE INDEX ATNextIncomingHeightTimestampAddressIndex "
+							+ "ON ATNextIncoming (block_height, sleep_until_message_timestamp, AT_address)");
 
-					stmt.execute("DELETE FROM ATIncomingTransactions");
-					stmt.execute("INSERT INTO ATIncomingTransactions (AT_address, block_height, block_sequence, signature) "
-							+ "SELECT AT_address, block_height, block_sequence, signature FROM ("
-							+ "SELECT PT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
-							+ "FROM PaymentTransactions PT "
-							+ "JOIN Transactions T USING (signature) "
-							+ "JOIN ATs ON ATs.AT_address = PT.recipient "
-							+ "UNION "
-							+ "SELECT MT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
-							+ "FROM MessageTransactions MT "
-							+ "JOIN Transactions T USING (signature) "
-							+ "JOIN ATs ON ATs.AT_address = MT.recipient "
-							+ "UNION "
-							+ "SELECT ATT.recipient AS AT_address, T.block_height, T.block_sequence, T.signature "
-							+ "FROM ATTransactions ATT "
-							+ "JOIN Transactions T USING (signature) "
-							+ "JOIN ATs ON ATs.AT_address = ATT.recipient"
-							+ ") AS Incoming "
-							+ "WHERE block_height IS NOT NULL AND block_sequence IS NOT NULL");
-
-					break;
-
-				case 54:
-
-					// Derived/rebuildable pointer to each AT's current latest state data row for execution hot path.
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATCurrentState ("
+					// Current state pointer, avoiding repeated max-height lookups during AT execution.
+					stmt.execute("CREATE TABLE ATCurrentState ("
 							+ "AT_address QortalAddress NOT NULL, height INTEGER NOT NULL, "
 							+ "PRIMARY KEY (AT_address))");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATStatesDataAddressHeightIndex ON ATStatesData (AT_address, height)");
+					stmt.execute("CREATE INDEX ATStatesDataAddressHeightIndex ON ATStatesData (AT_address, height)");
+					stmt.execute("CREATE INDEX ATsCurrentStateHeightIndex ON ATs (current_state_height)");
 
-					stmt.execute("DELETE FROM ATCurrentState");
-					stmt.execute("INSERT INTO ATCurrentState (AT_address, height) "
-							+ "SELECT AT_address, MAX(height) "
-							+ "FROM ATStatesData "
-							+ "GROUP BY AT_address");
-
-					break;
-
-				case 55:
-
-					// Canonical content-addressed AT state blobs. ATStates remains the per-height consensus metadata.
-					if (!columnExists(connection, "ATSTATES", "PREVIOUS_HEIGHT"))
-						stmt.execute("ALTER TABLE ATStates ADD previous_height INTEGER");
-
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATStateBlobs ("
+					// Content-addressed AT state bytes. ATStates remains the per-height metadata row.
+					stmt.execute("CREATE TABLE ATStateBlobs ("
 							+ "state_hash ATStateHash NOT NULL, state_data ATState NOT NULL, "
 							+ "created_height INTEGER NOT NULL, state_data_length INTEGER NOT NULL, "
 							+ "PRIMARY KEY (state_hash))");
 					stmt.execute("SET TABLE ATStateBlobs NEW SPACE");
 
-					try (ResultSet resultSet = stmt.executeQuery("SELECT ATStates.state_hash, ATStatesData.state_data, ATStates.height "
-							+ "FROM ATStates "
-							+ "JOIN ATStatesData USING (AT_address, height)");
-							PreparedStatement preparedStatement = connection.prepareStatement("INSERT INTO ATStateBlobs "
-									+ "(state_hash, state_data, created_height, state_data_length) VALUES (?, ?, ?, ?) "
-									+ "ON DUPLICATE KEY UPDATE state_hash = state_hash")) {
-						int batchCount = 0;
-
-						while (resultSet.next()) {
-							byte[] stateData = resultSet.getBytes(2);
-							preparedStatement.setBytes(1, resultSet.getBytes(1));
-							preparedStatement.setBytes(2, stateData);
-							preparedStatement.setInt(3, resultSet.getInt(3));
-							preparedStatement.setInt(4, stateData.length);
-							preparedStatement.addBatch();
-
-							if (++batchCount % 1000 == 0)
-								preparedStatement.executeBatch();
-						}
-
-						preparedStatement.executeBatch();
-					}
-
-					break;
-
-				case 56:
-
-					// Hot-path copy of the rebuildable current-state pointer, folded into AT runtime metadata updates.
-					// ATCurrentState remains as a compatibility/rebuild cache.
-					if (!columnExists(connection, "ATS", "CURRENT_STATE_HEIGHT"))
-						stmt.execute("ALTER TABLE ATs ADD current_state_height INTEGER");
-
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATsCurrentStateHeightIndex ON ATs (current_state_height)");
-
-					stmt.execute("UPDATE ATs SET current_state_height = ("
-							+ "SELECT MAX(height) "
-							+ "FROM ATStates "
-							+ "LEFT OUTER JOIN ATStateBlobs USING (state_hash) "
-							+ "LEFT OUTER JOIN ATStatesData USING (AT_address, height) "
-							+ "WHERE ATStates.AT_address = ATs.AT_address "
-							+ "AND (ATStateBlobs.state_hash IS NOT NULL OR ATStatesData.AT_address IS NOT NULL))");
-
-					break;
-
-				case 57:
-
-					// Narrow mutable AT runtime table. ATs keeps immutable deployment/code data; hot block processing
-					// updates ATRuntime to avoid rewriting wide ATs rows.
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATRuntime ("
+					// Narrow mutable runtime row for AT fields that change during execution.
+					stmt.execute("CREATE TABLE ATRuntime ("
 							+ "AT_address QortalAddress NOT NULL, "
 							+ "is_sleeping BOOLEAN NOT NULL, sleep_until_height INTEGER, "
 							+ "is_finished BOOLEAN NOT NULL, had_fatal_error BOOLEAN NOT NULL, "
 							+ "is_frozen BOOLEAN NOT NULL, frozen_balance QortalAmount, "
 							+ "sleep_until_message_timestamp BIGINT, current_state_height INTEGER, "
 							+ "PRIMARY KEY (AT_address), FOREIGN KEY (AT_address) REFERENCES ATs (AT_address) ON DELETE CASCADE)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedIndex ON ATRuntime (is_finished)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeSleepMessageIndex ON ATRuntime (sleep_until_message_timestamp)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeCurrentStateHeightIndex ON ATRuntime (current_state_height)");
+					stmt.execute("CREATE INDEX ATRuntimeFinishedIndex ON ATRuntime (is_finished)");
+					stmt.execute("CREATE INDEX ATRuntimeSleepMessageIndex ON ATRuntime (sleep_until_message_timestamp)");
+					stmt.execute("CREATE INDEX ATRuntimeCurrentStateHeightIndex ON ATRuntime (current_state_height)");
+					stmt.execute("CREATE INDEX ATRuntimeFinishedAddressIndex ON ATRuntime (is_finished, AT_address)");
+					stmt.execute("CREATE INDEX ATRuntimeFinishedMessageAddressIndex "
+							+ "ON ATRuntime (is_finished, sleep_until_message_timestamp, AT_address)");
+					stmt.execute("CREATE INDEX ATRuntimeFinishedHeightAddressIndex "
+							+ "ON ATRuntime (is_finished, sleep_until_height, AT_address)");
 
-					stmt.execute("DELETE FROM ATRuntime");
-					stmt.execute("INSERT INTO ATRuntime (AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
-							+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height) "
-							+ "SELECT AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
-							+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height "
-							+ "FROM ATs");
-
-					break;
-
-				case 58:
-
-					// Match the executable-AT hot path after mutable runtime state moved out of ATs.
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedAddressIndex ON ATRuntime (is_finished, AT_address)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATCreatedOrderIndex ON ATs (created_when, AT_address)");
-
-					break;
-
-				case 59:
-
-					// Derived scheduler for AT execution. Canonical runtime state remains in ATRuntime/ATStates.
-					stmt.execute("CREATE TABLE IF NOT EXISTS ATExecutionQueue ("
+					// Rebuildable scheduler for ATs that can execute at or before a given height.
+					stmt.execute("CREATE TABLE ATExecutionQueue ("
 							+ "AT_address QortalAddress NOT NULL, next_height INTEGER NOT NULL, "
 							+ "PRIMARY KEY (AT_address), FOREIGN KEY (AT_address) REFERENCES ATs (AT_address) ON DELETE CASCADE)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATExecutionQueueNextHeightIndex ON ATExecutionQueue (next_height, AT_address)");
-
-					stmt.execute("DELETE FROM ATExecutionQueue");
-					stmt.execute("INSERT INTO ATExecutionQueue (AT_address, next_height) "
-							+ "SELECT ATs.AT_address, "
-							+ "CASE "
-								+ "WHEN ATRuntime.sleep_until_message_timestamp IS NULL THEN 0 "
-								+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
-									+ "AND ATRuntime.sleep_until_height != 0 "
-									+ "AND ATNextIncoming.block_height IS NOT NULL "
-									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
-									+ "THEN CASE "
-										+ "WHEN ATRuntime.sleep_until_height <= ATNextIncoming.block_height + 1 "
-											+ "THEN ATRuntime.sleep_until_height "
-										+ "ELSE ATNextIncoming.block_height + 1 "
-									+ "END "
-								+ "WHEN ATRuntime.sleep_until_height IS NOT NULL "
-									+ "AND ATRuntime.sleep_until_height != 0 "
-									+ "THEN ATRuntime.sleep_until_height "
-								+ "WHEN ATNextIncoming.block_height IS NOT NULL "
-									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp "
-									+ "THEN ATNextIncoming.block_height + 1 "
-							+ "END "
-							+ "FROM ATs "
-							+ "JOIN ATRuntime ON ATRuntime.AT_address = ATs.AT_address "
-							+ "LEFT OUTER JOIN ATNextIncoming ON ATNextIncoming.AT_address = ATs.AT_address "
-							+ "WHERE ATRuntime.is_finished = false "
-							+ "AND (ATRuntime.sleep_until_message_timestamp IS NULL "
-								+ "OR (ATRuntime.sleep_until_height IS NOT NULL AND ATRuntime.sleep_until_height != 0) "
-								+ "OR (ATNextIncoming.block_height IS NOT NULL "
-									+ "AND ATNextIncoming.sleep_until_message_timestamp = ATRuntime.sleep_until_message_timestamp))");
+					stmt.execute("CREATE INDEX ATExecutionQueueNextHeightIndex ON ATExecutionQueue (next_height, AT_address)");
+					stmt.execute("CREATE INDEX ATCreatedOrderIndex ON ATs (created_when, AT_address)");
 
 					break;
 
-				case 60:
+				case 53:
 
-					// The event-driven AT inbox maintenance and orphan path delete by block height.
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATIncomingTransactionsBlockHeightIndex "
-							+ "ON ATIncomingTransactions (block_height, AT_address)");
-
-					break;
-
-				case 61:
-
-					// Keep the AT execution-queue verifier indexed without changing consensus state.
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedMessageAddressIndex "
-							+ "ON ATRuntime (is_finished, sleep_until_message_timestamp, AT_address)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeFinishedHeightAddressIndex "
-							+ "ON ATRuntime (is_finished, sleep_until_height, AT_address)");
-					stmt.execute("CREATE INDEX IF NOT EXISTS ATNextIncomingHeightTimestampAddressIndex "
-							+ "ON ATNextIncoming (block_height, sleep_until_message_timestamp, AT_address)");
+					// Marker/index for the arbitrary resource cache startup check. Population remains in startup code,
+					// matching latest_signature_populated from case 51.
+					stmt.execute("ALTER TABLE DatabaseInfo ADD arbitrary_resources_cache_build_version INT NOT NULL DEFAULT 0");
+					stmt.execute("CREATE INDEX ArbitraryTransactionsResourceKeyIndex ON ArbitraryTransactions (service, name, identifier)");
 
 					break;
 
