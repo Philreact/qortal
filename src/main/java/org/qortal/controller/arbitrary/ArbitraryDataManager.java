@@ -221,6 +221,8 @@ public class ArbitraryDataManager extends Thread {
 		if (System.currentTimeMillis() < this.startupSyncDeferUntil)
 			return true;
 
+		// QDN discovery/fetch work is background work. Check requested/pending sync too, otherwise these loops can start
+		// expensive repository/network work just before the synchronizer begins applying blocks.
 		Synchronizer synchronizer = Synchronizer.getInstance();
 		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}

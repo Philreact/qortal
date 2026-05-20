@@ -22,6 +22,11 @@ public class AT {
 	private Repository repository;
 	private ATData atData;
 	private ATStateData atStateData;
+	/*
+	 * Block.executeATs() now runs ATs in two phases: first a cheap wake check, then a batched latest-state load.
+	 * Keep the API object created during the wake check so the second phase does not rebuild API state or change
+	 * sleep/wake semantics compared with the original single-call run() path.
+	 */
 	private QortalATAPI preparedApi;
 
 	// Constructors
@@ -179,6 +184,11 @@ public class AT {
 		return true;
 	}
 
+	/*
+	 * Hot-path entry used after Block.executeATs() batch-loads current AT states. The caller already performed the
+	 * willExecute() decision, so this method continues with the exact same API object when available and only falls
+	 * back to constructing one for legacy/direct callers.
+	 */
 	public List<AtTransaction> runWithLatestState(int blockHeight, long blockTimestamp, ATStateData latestAtStateData) throws DataException {
 		ATExecInstrumentation inst = ATExecInstrumentation.peek();
 

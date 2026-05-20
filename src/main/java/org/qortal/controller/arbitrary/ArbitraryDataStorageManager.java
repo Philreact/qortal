@@ -122,6 +122,8 @@ public class ArbitraryDataStorageManager extends Thread {
         if (System.currentTimeMillis() < this.startupSyncDeferUntil)
             return true;
 
+        // Sync can be requested before isSynchronizing flips true, especially at startup. Treat either state as a
+        // reason to defer disk-heavy QDN maintenance so block validation/repository work gets priority.
         Synchronizer synchronizer = Synchronizer.getInstance();
         return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
     }
@@ -489,6 +491,8 @@ public class ArbitraryDataStorageManager extends Thread {
     private DirectorySizeResult directorySize(Path path) throws IOException {
         DirectorySizeResult result = new DirectorySizeResult();
 
+        // WalkFileTree uses file attributes supplied during traversal, avoiding the extra File object/stat churn from
+        // FileUtils.sizeOfDirectory while still working across Linux, Windows, and macOS.
         Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {

@@ -330,6 +330,8 @@ public class ArbitraryDataCleanupManager extends Thread {
 		if (System.currentTimeMillis() < this.startupSyncDeferUntil)
 			return true;
 
+		// Cleanup can open repositories and delete files for a long time. Defer when sync is requested/pending, not only
+		// after active synchronization starts, so startup catch-up is not competing with QDN maintenance.
 		Synchronizer synchronizer = Synchronizer.getInstance();
 		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}

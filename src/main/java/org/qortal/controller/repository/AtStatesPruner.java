@@ -148,6 +148,8 @@ public class AtStatesPruner implements Runnable {
 		if (System.currentTimeMillis() < startupSyncDeferUntil)
 			return true;
 
+		// Pruning can hold repository work for many heights. Deferring on requested/pending sync avoids starting a prune
+		// pass just before block synchronization begins.
 		Synchronizer synchronizer = Synchronizer.getInstance();
 		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}

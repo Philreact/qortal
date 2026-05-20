@@ -72,6 +72,11 @@ public class QortalATAPI extends API {
 		return willExecute(blockHeight, precomputedWake, precomputedWake != null);
 	}
 
+	/*
+	 * precomputedWakeAvailable is intentionally separate from precomputedWake being null: a null value can mean
+	 * "the cursor was checked and there is no message", whereas false means this caller did not pre-load the cursor
+	 * and the repository must perform the normal findNextTransaction() lookup.
+	 */
 	public boolean willExecute(int blockHeight, NextTransactionInfo precomputedWake, boolean precomputedWakeAvailable) throws DataException {
 		ATExecInstrumentation inst = ATExecInstrumentation.peek();
 		long wallStart = System.nanoTime();

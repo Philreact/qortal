@@ -34,6 +34,10 @@ public class HSQLDBATRepository implements ATRepository {
 
 	private static final Logger LOGGER = LogManager.getLogger(HSQLDBATRepository.class);
 
+	/*
+	 * ATExecutionQueue is derived from canonical ATRuntime/ATNextIncoming state. Verify it once per JVM startup before
+	 * trusting it on the hot path, and repair from canonical state if a local database is missing/stale.
+	 */
 	private static volatile boolean executionQueueVerified = false;
 
 	protected HSQLDBRepository repository;
@@ -44,6 +48,11 @@ public class HSQLDBATRepository implements ATRepository {
 		this.repository = repository;
 	}
 
+	/*
+	 * Mutable runtime fields were moved to ATRuntime so normal AT execution no longer rewrites the wide ATs row that
+	 * contains immutable deployment/code bytes. The fallback keeps older/incomplete databases readable until ATRuntime
+	 * has been backfilled or repaired.
+	 */
 	private static String runtimeColumn(String columnName) {
 		return "CASE WHEN ATRuntime.AT_address IS NULL THEN ATs." + columnName + " ELSE ATRuntime." + columnName + " END";
 	}
@@ -261,6 +270,8 @@ public class HSQLDBATRepository implements ATRepository {
 		this.ensureExecutionQueueVerified();
 		this.verifyExecutionQueueForHeight(blockHeight);
 
+		// Query the derived scheduler instead of scanning every unfinished AT. The verifier above keeps fork safety by
+		// comparing due rows against canonical runtime/cursor state before the queue is used.
 		String sql = "SELECT ATs.AT_address, creator, created_when, version, asset_id, code_bytes, code_hash, "
 				+ "ATRuntime.is_sleeping, ATRuntime.sleep_until_height, ATRuntime.had_fatal_error, "
 				+ "ATRuntime.is_frozen, ATRuntime.frozen_balance, ATRuntime.sleep_until_message_timestamp "
@@ -336,6 +347,8 @@ public class HSQLDBATRepository implements ATRepository {
 		if (canonicalDueATs.equals(queuedDueATs))
 			return;
 
+		// The queue is a rebuildable acceleration structure, so a mismatch is repaired from canonical runtime/cursor
+		// state. If repair still disagrees, fail validation instead of using a potentially wrong wake set.
 		Set<String> affectedATs = new LinkedHashSet<>(canonicalDueATs);
 		affectedATs.addAll(queuedDueATs);
 
@@ -783,6 +796,10 @@ public class HSQLDBATRepository implements ATRepository {
 
 	private byte[] verifyAndResolveStateData(String atAddress, int height, byte[] stateHash, byte[] blobStateData,
 			byte[] legacyStateData, boolean requireStateData) throws DataException {
+		/*
+		 * During rollout both storage paths can exist. Always verify bytes against ATStates.state_hash, and when both
+		 * blob and legacy bytes exist require them to be identical so the content-addressed path cannot silently diverge.
+		 */
 		if (blobStateData != null) {
 			byte[] blobStateHash = Crypto.digest(blobStateData);
 			if (!Arrays.equals(blobStateHash, stateHash))
@@ -961,6 +978,11 @@ public class HSQLDBATRepository implements ATRepository {
 		if (atAddresses.isEmpty())
 			return new ArrayList<>(0);
 
+		/*
+		 * Current-state lookup is the execution hot path. Resolve bytes through ATStateBlobs first, with legacy
+		 * ATStatesData still joined for rollout verification/fallback. Canonical state identity remains the
+		 * ATStates.state_hash row, not the pointer/cache tables.
+		 */
 		String sql = "SELECT RequestedATs.AT_address, CurrentATStates.height, "
 				+ "CurrentATStates.blob_state_data, CurrentATStates.legacy_state_data, "
 				+ "CurrentATStates.state_hash, CurrentATStates.fees, CurrentATStates.is_initial, "
@@ -1014,6 +1036,7 @@ public class HSQLDBATRepository implements ATRepository {
 	@Override
 	public void rebuildATCurrentStates() throws DataException {
 		try {
+			// Rebuild from retained canonical ATStates and any available state bytes source.
 			this.repository.executeCheckedUpdate("DELETE FROM ATCurrentState");
 			this.repository.executeCheckedUpdate("INSERT INTO ATCurrentState (AT_address, height) "
 					+ "SELECT AT_address, MAX(height) "
@@ -1033,6 +1056,8 @@ public class HSQLDBATRepository implements ATRepository {
 
 	@Override
 	public void rebuildATStateBlobs() throws DataException {
+		// ATStateBlobs is content-addressed storage derived from legacy ATStatesData during rollout.
+		// Rebuilding is idempotent because duplicate hashes are ignored.
 		String selectSql = "SELECT ATStates.state_hash, ATStatesData.state_data, ATStates.height "
 				+ "FROM ATStates "
 				+ "JOIN ATStatesData USING (AT_address, height)";
@@ -1102,6 +1127,8 @@ public class HSQLDBATRepository implements ATRepository {
 		if (atAddresses == null || atAddresses.isEmpty())
 			return;
 
+		// Keep all three current-height copies aligned: ATCurrentState is rebuildable, while ATs/ATRuntime keep the
+		// latest pointer near the hot runtime rows to avoid repeated max-height lookups.
 		String currentStateSql = "INSERT INTO ATCurrentState (AT_address, height) VALUES (?, ?) "
 				+ "ON DUPLICATE KEY UPDATE AT_address = ?, height = ?";
 		String atsSql = "UPDATE ATs SET current_state_height = ? WHERE AT_address = ?";
@@ -1179,6 +1206,7 @@ public class HSQLDBATRepository implements ATRepository {
 	}
 
 	private void setCurrentATStateFromPreviousHeight(String atAddress, Integer previousHeight, boolean isInitial) throws DataException, SQLException {
+		// Orphan rollback can usually trust ATStates.previous_height and avoid a max-height scan.
 		if (previousHeight != null) {
 			updateCurrentATState(atAddress, previousHeight);
 			return;
@@ -1194,6 +1222,8 @@ public class HSQLDBATRepository implements ATRepository {
 	}
 
 	private DeletedATStatePointerInfo fetchDeletedATStatePointerInfo(String atAddress, int height) throws DataException {
+		// Compare all pointer copies before deleting the row; if a newer pointer already exists, the orphaned row is not
+		// the active state and the current pointer should be left alone.
 		String sql = "SELECT previous_height, is_initial, "
 				+ "(SELECT MAX(pointer_height) FROM ("
 				+ "SELECT current_state_height AS pointer_height FROM ATRuntime WHERE AT_address = ? AND current_state_height IS NOT NULL "
@@ -1692,6 +1722,8 @@ public class HSQLDBATRepository implements ATRepository {
 		if (atStateData.getStateHash() == null || atStateData.getHeight() == null)
 			throw new IllegalArgumentException("Refusing to save partial AT state into repository!");
 
+		// ATStates is the canonical per-height record. State bytes are stored by hash in ATStateBlobs, with optional
+		// legacy ATStatesData writes kept for rollout/backwards compatibility.
 		ATExecInstrumentation inst = ATExecInstrumentation.peek();
 		HSQLDBSaver atStatesSaver = new HSQLDBSaver("ATStates");
 		long tPreviousHeight = System.nanoTime();
@@ -1805,6 +1837,11 @@ public class HSQLDBATRepository implements ATRepository {
 
 		String deleteAtStatesDataSql = "DELETE FROM ATStatesData WHERE AT_address = ? AND height = ?";
 
+		/*
+		 * Batch the canonical state metadata first, then insert only missing content-addressed blobs. Multiple AT state
+		 * rows can reference the same state_hash, so this avoids rewriting identical large blobs while preserving full
+		 * per-height history in ATStates.
+		 */
 		Lock readLock = HSQLDBRepository.CHECKPOINT_GATE.readLock();
 		long tLockWait = System.nanoTime();
 		readLock.lock();
@@ -1841,6 +1878,7 @@ public class HSQLDBATRepository implements ATRepository {
 			boolean hasStateDataRows = false;
 			Map<ByteArray, ATStateData> stateDataByHash = new HashMap<>();
 
+			// Deduplicate candidate blobs within this block before checking which hashes already exist in the DB.
 			for (ATStateData atStateData : atStateDataList) {
 				if (atStateData.getStateData() == null)
 					continue;
@@ -2051,6 +2089,8 @@ public class HSQLDBATRepository implements ATRepository {
 	}
 
 	private Integer fetchPreviousATStateHeight(String atAddress, int height) throws DataException {
+		// Prefer pointer tables for the previous height. If those are unavailable or stale, fall back to canonical
+		// ATStates so a bad pointer cannot corrupt the rollback chain.
 		String currentPointerSql = "SELECT MAX(pointer_height) FROM ("
 				+ "SELECT current_state_height AS pointer_height FROM ATRuntime WHERE AT_address = ? AND current_state_height < ? "
 				+ "UNION ALL "
@@ -2274,6 +2314,7 @@ public class HSQLDBATRepository implements ATRepository {
 	@Override
 	public void rebuildATIncomingTransactions() throws DataException {
 		try {
+			// Derived inbox: rebuild only from confirmed canonical transaction subtype tables and existing AT addresses.
 			this.repository.executeCheckedUpdate("DELETE FROM ATIncomingTransactions");
 
 			this.repository.executeCheckedUpdate(buildInsertATIncomingTransactionsSql(null));
@@ -2316,6 +2357,7 @@ public class HSQLDBATRepository implements ATRepository {
 
 	@Override
 	public void rebuildATExecutionQueue() throws DataException {
+		// Recompute each AT's earliest possible wake height from canonical runtime metadata plus the derived inbox cursor.
 		String selectSql = "SELECT ATs.AT_address, ATRuntime.is_finished, ATRuntime.sleep_until_height, "
 				+ "ATRuntime.sleep_until_message_timestamp, ATNextIncoming.sleep_until_message_timestamp, "
 				+ "ATNextIncoming.block_height "
@@ -2521,6 +2563,8 @@ public class HSQLDBATRepository implements ATRepository {
 		Set<String> existingATAddresses = new LinkedHashSet<>();
 
 		try {
+			// The block layer supplies candidate recipients cheaply while assigning sequences; this filter preserves the
+			// old semantics by only indexing recipients that are currently known ATs.
 			List<String> candidateATAddressList = new ArrayList<>(candidateATAddresses);
 			final int batchSize = 500;
 			for (int start = 0; start < candidateATAddressList.size(); start += batchSize) {
@@ -2612,6 +2656,8 @@ public class HSQLDBATRepository implements ATRepository {
 		if (sleepUntilMessageTimestamp == null)
 			return;
 
+		// Store the wake cursor with the exact sleep timestamp that produced it. Readers reject mismatched timestamps,
+		// which makes stale rows harmless after AT runtime changes or orphan rollback.
 		Timestamp previousTxTimestamp = new Timestamp(sleepUntilMessageTimestamp);
 		NextTransactionInfo nextTransactionInfo = findNextTransactionCanonical(atAddress,
 				previousTxTimestamp.blockHeight, previousTxTimestamp.transactionSequence);
@@ -2662,6 +2708,8 @@ public class HSQLDBATRepository implements ATRepository {
 		if (sleepTimestampByAT.isEmpty())
 			return nextIncomingByAT;
 
+		// Only load cursors for ATs that are message-sleeping and not already height-wakeable. Missing or stale cursor
+		// rows are recomputed before the method returns, so callers can use null as an explicit "no message" result.
 		List<String> atAddresses = new ArrayList<>(sleepTimestampByAT.keySet());
 		String sql = "SELECT AT_address, sleep_until_message_timestamp, block_height, block_sequence, signature "
 				+ "FROM ATNextIncoming "

@@ -121,6 +121,8 @@ public class AtStatesTrimmer implements Runnable {
 		if (System.currentTimeMillis() < startupSyncDeferUntil)
 			return true;
 
+		// Trimming is maintenance, not consensus-critical. Defer when sync is requested/pending so it does not start a
+		// long repository pass while the synchronizer is about to apply blocks.
 		Synchronizer synchronizer = Synchronizer.getInstance();
 		return synchronizer.isSyncRequested() || synchronizer.isSyncRequestPending() || synchronizer.isSynchronizing();
 	}

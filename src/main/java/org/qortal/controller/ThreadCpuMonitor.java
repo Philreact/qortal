@@ -15,6 +15,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * Lightweight diagnostic sampler for finding background CPU contention during sync.
+ * <p>
+ * It samples JVM thread CPU deltas through {@link ThreadMXBean}; it does not affect consensus logic or repository
+ * scheduling decisions.
+ */
 public class ThreadCpuMonitor extends Thread {
 
 	private static final Logger LOGGER = LogManager.getLogger(ThreadCpuMonitor.class);

@@ -1595,6 +1595,8 @@ public class Block {
 			inst.exec_allocateListsNanos += System.nanoTime() - t;
 
 			long tFetch = System.nanoTime();
+			// Use the derived execution queue so sleeping ATs are not polled every block.
+			// The repository verifies/repairs the queue against canonical runtime state before returning rows.
 			List<ATData> executableATs = this.repository.getATRepository().getExecutableATs(blockHeight);
 			inst.exec_fetch_executable_totalNanos += System.nanoTime() - tFetch;
 
@@ -1602,10 +1604,12 @@ public class Block {
 			long boundary = loopWallStart;
 			List<AT> atsToRun = new ArrayList<>();
 			List<String> atAddressesToRun = new ArrayList<>();
+			// Batch-load sleep-until-message cursors once for the block. A cached null cursor means "checked, no wake".
 			Map<String, ATRepository.NextTransactionInfo> nextIncomingByAtAddress =
 					this.repository.getATRepository().getNextIncomingForATs(executableATs, blockHeight);
 
-			// First pass: preserve AT wake decisions while avoiding per-AT latest-state reads.
+			// First pass: decide which ATs will run while preserving their pre-execution scheduling fields.
+			// Those previous values drive minimal runtime/cursor/queue updates after the state rows are saved.
 			for (ATData atData : executableATs) {
 				long gapStart = System.nanoTime();
 				if (inst.exec_loopIterations > 0)
@@ -1641,6 +1645,7 @@ public class Block {
 			}
 
 			long tLatestStates = System.nanoTime();
+			// Only ATs that passed willExecute() need state bytes, so fetch their current states in one batch.
 			List<ATStateData> latestAtStates = this.repository.getATRepository().getCurrentATStates(atAddressesToRun);
 			inst.exec_sum_postWill_getLatestStateNanos += System.nanoTime() - tLatestStates;
 
@@ -1659,6 +1664,8 @@ public class Block {
 				if (atStateData == null)
 					continue;
 
+				// Store previous_height in the per-height state row so orphan rollback can move the current-state
+				// pointer directly instead of scanning ATStates for the prior max height.
 				atStateData.setPreviousHeight(latestAtStateData == null ? null : latestAtStateData.getHeight());
 
 				allAtTransactions.addAll(atTransactions);
@@ -2070,6 +2077,11 @@ public class Block {
 			List<ATData> currentHeightOnlyRuntimeUpdateATs = new ArrayList<>();
 			List<AccountBalanceData> atFeeBalanceDeltas = new ArrayList<>();
 
+			/*
+			 * Apply AT persistence in batches: fees, canonical per-height state rows, then mutable runtime metadata.
+			 * The maps captured during executeATs() let us distinguish ATs whose scheduling/runtime fields changed from
+			 * ATs that only need their current-state pointer advanced.
+			 */
 			for (ATStateData atStateData : this.ourAtStates) {
 				inst.apply_fees_rowCount++;
 
@@ -2137,6 +2149,7 @@ public class Block {
 					inst.apply_fees_sum_update_batchRuntimeFullNanos
 							+ inst.apply_fees_sum_update_batchRuntimeCurrentHeightNanos;
 
+			// Cursor and execution-queue recomputes are limited to ATs whose wake inputs changed.
 			t = System.nanoTime();
 			atRepository.recomputeNextIncomingForATs(sleepMessageChangedATs);
 			inst.apply_fees_sum_update_recomputeNextIncomingNanos += System.nanoTime() - t;
@@ -2225,6 +2238,8 @@ public class Block {
 			updateSequenceNanos += System.nanoTime() - t;
 			transaction.getTransactionData().setBlockSequence(sequence);
 
+			// Build AT inbox candidates while canonical block height/sequence are assigned.
+			// The repository filters this list to existing ATs before updating derived inbox/cursor tables.
 			String atIncomingRecipient = getATIncomingRecipient(transactionData);
 			if (atIncomingRecipient != null)
 				incomingATTransactionCandidates.add(new ATRepository.IncomingTransactionInfo(atIncomingRecipient,
@@ -2249,6 +2264,7 @@ public class Block {
 				incomingATTransactionCandidates);
 		recordAtIncomingNanos = System.nanoTime() - t;
 		affectedATCount = affectedATs.size();
+		// Only ATs that received a transaction in this block can have their message cursor/queue row changed.
 		t = System.nanoTime();
 		this.repository.getATRepository().recomputeNextIncomingForATs(affectedATs);
 		recomputeAtNextIncomingNanos = System.nanoTime() - t;
