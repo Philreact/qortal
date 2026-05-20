@@ -1492,89 +1492,35 @@ public class Block {
 	 * @throws DataException
 	 */
 	private ValidationResult areAtsValid() throws DataException {
-		final String tag = "[AT.areAtsValid]";
-		final int blockHeight = this.blockData.getHeight();
-
-		long tRef = System.nanoTime();
 		// Locally generated AT states should be valid so no need to re-execute them
-		if (this.ourAtStates != null && this.ourAtStates == this.atStates) { // Note object reference compare
-			LOGGER.info("{} blockHeight={} step=V_SKIP_fast_path_refs_equal_ALREADY_MATCHING_ms={}",
-					tag, blockHeight,
-					ATExecInstrumentation.ms(System.nanoTime() - tRef));
+		if (this.ourAtStates != null && this.ourAtStates == this.atStates) // Note object reference compare
 			return ValidationResult.OK;
-		}
 
-		LOGGER.info("{} blockHeight={} step=V_NEED_run_full_comparison_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tRef));
-
-		long tExec = System.nanoTime();
 		// Generate local AT states for comparison
 		this.executeATs();
-		LOGGER.info("{} blockHeight={} step=V_EMBEDDED_invoke_executeATs_fence_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tExec));
 
-		long tCount = System.nanoTime();
-		if (this.ourAtStates.size() != this.blockData.getATCount()) {
-			LOGGER.info("{} blockHeight={} step=V_FAIL_AT_STATE_COUNT_MISMATCH_ourVersusBlock_after_ms={} ourCount={} blockAtCount={}",
-					tag, blockHeight,
-					ATExecInstrumentation.ms(System.nanoTime() - tCount),
-					this.ourAtStates.size(), this.blockData.getATCount());
+		if (this.ourAtStates.size() != this.blockData.getATCount())
 			return ValidationResult.AT_STATES_MISMATCH;
-		}
 
-		LOGGER.info("{} blockHeight={} step=V_PASS_AT_ROW_COUNT_EQUALS_blockField_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tCount));
-
-		long tFees = System.nanoTime();
-		if (this.ourAtFees != this.blockData.getATFees()) {
-			LOGGER.info("{} blockHeight={} step=V_FAIL_AT_AGGREGATE_fee_SUM_field_mismatch_after_ms={} ourFees={} blockAtFees={}",
-					tag, blockHeight,
-					ATExecInstrumentation.ms(System.nanoTime() - tFees),
-					this.ourAtFees, this.blockData.getATFees());
+		if (this.ourAtFees != this.blockData.getATFees())
 			return ValidationResult.AT_STATES_MISMATCH;
-		}
-		LOGGER.info("{} blockHeight={} step=V_PASS_AT_aggregate_FEE_equals_block_Field_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tFees));
 
-		long tPairOrHashBranch = System.nanoTime();
 		// If we have a single AT states hash then compare that in preference
 		if (this.atStatesHash != null) {
 			int atBytesLength = blockData.getATCount() * BlockTransformer.AT_ENTRY_LENGTH;
 			ByteArrayOutputStream atHashBytes = new ByteArrayOutputStream(atBytesLength);
 
 			try {
-				long tSer = System.nanoTime();
 				for (ATStateData atStateData : this.ourAtStates) {
 					atHashBytes.write(atStateData.getATAddress().getBytes(StandardCharsets.UTF_8));
 					atHashBytes.write(atStateData.getStateHash());
 					atHashBytes.write(Longs.toByteArray(atStateData.getFees()));
 				}
-				long afterSer = System.nanoTime();
-				LOGGER.info("{} blockHeight={} step=V_COMPARE_hash_path_serialize_Address_hash_fees_ROWS_ms={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(afterSer - tSer));
 
-				long tDigest = System.nanoTime();
 				byte[] ourAtStatesHash = Crypto.digest(atHashBytes.toByteArray());
-				long afterDigest = System.nanoTime();
-				LOGGER.info("{} blockHeight={} step=V_COMPARE_hash_path_Crypto_digest_only_ms={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(afterDigest - tDigest));
 
-				if (!Arrays.equals(ourAtStatesHash, this.atStatesHash)) {
-					LOGGER.info("{} blockHeight={} step=V_FAIL_AT_STATES_HASH_compare_after_total_branch_ms={}",
-							tag, blockHeight,
-							ATExecInstrumentation.ms(System.nanoTime() - tPairOrHashBranch));
+				if (!Arrays.equals(ourAtStatesHash, this.atStatesHash))
 					return ValidationResult.AT_STATES_MISMATCH;
-				}
-
-				LOGGER.info("{} blockHeight={} step=V_PASS_AT_states_HASH_fast_path_EQUALS_remote_ms={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(System.nanoTime() - tPairOrHashBranch));
 
 				// Use our AT state data from now on
 				this.atStates = this.ourAtStates;
@@ -1584,45 +1530,22 @@ public class Block {
 			}
 		}
 
-		long tStates = System.nanoTime();
 		// Note: this.atStates fully loaded thanks to this.getATStates() call:
 		this.getATStates();
-		LOGGER.info("{} blockHeight={} step=V_LOAD_peer_ATStates_via_get_ATStates_REPOSITORY_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tStates));
 
-		long tLoop = System.nanoTime();
 		for (int s = 0; s < this.ourAtStates.size(); ++s) {
 			ATStateData ourAtState = this.ourAtStates.get(s);
 			ATStateData theirAtState = this.atStates.get(s);
 
-			if (!ourAtState.getATAddress().equals(theirAtState.getATAddress())) {
-				LOGGER.info("{} blockHeight={} step=V_FAIL_pairwise_MISMATCH_address_at_Index_ms={} index={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(System.nanoTime() - tLoop),
-						s);
+			if (!ourAtState.getATAddress().equals(theirAtState.getATAddress()))
 				return ValidationResult.AT_STATES_MISMATCH;
-			}
 
-			if (!Arrays.equals(ourAtState.getStateHash(), theirAtState.getStateHash())) {
-				LOGGER.info("{} blockHeight={} step=V_FAIL_pairwise_MISMATCH_stateHash_INDEX_ms={} index={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(System.nanoTime() - tLoop),
-						s);
+			if (!Arrays.equals(ourAtState.getStateHash(), theirAtState.getStateHash()))
 				return ValidationResult.AT_STATES_MISMATCH;
-			}
 
-			if (!ourAtState.getFees().equals(theirAtState.getFees())) {
-				LOGGER.info("{} blockHeight={} step=V_FAIL_pairwise_MISMATCH_JAVA_FEE_Boxed_FIELD_ms={} index={}",
-						tag, blockHeight,
-						ATExecInstrumentation.ms(System.nanoTime() - tLoop),
-						s);
+			if (!ourAtState.getFees().equals(theirAtState.getFees()))
 				return ValidationResult.AT_STATES_MISMATCH;
-			}
 		}
-		LOGGER.info("{} blockHeight={} step=V_pass_pairwise_ALL_rows_address_hash_fee_ms={}",
-				tag, blockHeight,
-				ATExecInstrumentation.ms(System.nanoTime() - tLoop));
 
 		return ValidationResult.OK;
 	}
@@ -1647,7 +1570,6 @@ public class Block {
 	 *
 	 */
 	private void executeATs() throws DataException {
-		final String tag = "[AT.exec]";
 		final int blockHeight = this.blockData.getHeight();
 
 		long wallStart = System.nanoTime();
@@ -1763,8 +1685,6 @@ public class Block {
 
 			inst.exec_wallTotalNanos += System.nanoTime() - wallStart;
 
-			inst.logExecuteATsDetailed(LOGGER, tag, blockHeight, executableATs.size(), this.ourAtStates.size());
-
 		} finally {
 			ATExecInstrumentation.unbind();
 		}
@@ -1874,10 +1794,6 @@ public class Block {
 			processTransactions();
 			processTransactionsNanos = System.nanoTime() - tTxnBatch;
 
-			LOGGER.info("[AT.process] blockHeight={} step=after_process_transactions_including_apply_AT_tx_fence_ms={}",
-					this.blockData.getHeight(),
-					ATExecInstrumentation.ms(processTransactionsNanos));
-
 			// Group-approval transactions
 			long tGroupApproval = System.nanoTime();
 			processGroupApprovalTransactions();
@@ -1887,11 +1803,6 @@ public class Block {
 			// Process AT fees and save AT states into repository
 			processAtFeesAndStates();
 			processAtFeesAndStatesNanos = System.nanoTime() - tFeesBatch;
-
-			LOGGER.info("[AT.process] blockHeight={} step=after_process_at_fees_and_states_fence_ms={}",
-					this.blockData.getHeight(),
-					ATExecInstrumentation.ms(processAtFeesAndStatesNanos));
-
 
 			// Commit new accounts' last-reference changes
 			long tAccountRefCommit = System.nanoTime();
@@ -1927,33 +1838,6 @@ public class Block {
 		long tDebugInfo = System.nanoTime();
 		this.logDebugInfo();
 		debugInfoNanos = System.nanoTime() - tDebugInfo;
-
-		long totalNanos = System.nanoTime() - tBlockProcessTotal;
-		long measuredNanos = getHeightNanos + rewardAndFixesNanos + accountRefCacheOpenNanos + processTransactionsNanos
-				+ processGroupApprovalNanos + processAtFeesAndStatesNanos + accountRefCacheCommitNanos
-				+ latestBlockLookupNanos + saveBlockNanos + linkTransactionsNanos + postBlockTidyNanos + debugInfoNanos;
-
-		LOGGER.info("[Block.process.summary] blockHeight={} step=BLOCK_PROCESS_OVERVIEW total_ms={} get_height_ms={} reward_and_fixes_ms={} "
-						+ "account_ref_cache_open_ms={} process_transactions_ms={} group_approval_ms={} at_fees_states_ms={} "
-						+ "account_ref_cache_commit_ms={} latest_block_lookup_ms={} save_block_ms={} link_transactions_ms={} "
-						+ "post_block_tidy_ms={} debug_info_ms={} residual_ms={} transaction_count={} at_state_count={}",
-				this.blockData.getHeight(),
-				ATExecInstrumentation.ms(totalNanos),
-				ATExecInstrumentation.ms(getHeightNanos),
-				ATExecInstrumentation.ms(rewardAndFixesNanos),
-				ATExecInstrumentation.ms(accountRefCacheOpenNanos),
-				ATExecInstrumentation.ms(processTransactionsNanos),
-				ATExecInstrumentation.ms(processGroupApprovalNanos),
-				ATExecInstrumentation.ms(processAtFeesAndStatesNanos),
-				ATExecInstrumentation.ms(accountRefCacheCommitNanos),
-				ATExecInstrumentation.ms(latestBlockLookupNanos),
-				ATExecInstrumentation.ms(saveBlockNanos),
-				ATExecInstrumentation.ms(linkTransactionsNanos),
-				ATExecInstrumentation.ms(postBlockTidyNanos),
-				ATExecInstrumentation.ms(debugInfoNanos),
-				ATExecInstrumentation.ms(totalNanos - measuredNanos),
-				this.transactions == null ? 0 : this.transactions.size(),
-				this.ourAtStates == null ? 0 : this.ourAtStates.size());
 	}
 
 	protected void increaseAccountLevels() throws DataException {
@@ -2081,8 +1965,6 @@ public class Block {
 	}
 
 	protected void processTransactions() throws DataException {
-		final String tag = "[AT.apply.txn]";
-		final int blockHeight = this.blockData.getHeight();
 		List<Transaction> blocksTransactions = this.getTransactions();
 
 		ATExecInstrumentation inst = new ATExecInstrumentation();
@@ -2114,7 +1996,6 @@ public class Block {
 					inst.apply_tx_referenceFeesNanos += System.nanoTime() - t;
 			}
 
-			inst.logAtTransactionsApply(LOGGER, tag, blockHeight);
 		} finally {
 			ATExecInstrumentation.unbind();
 		}
@@ -2172,8 +2053,6 @@ public class Block {
 	}
 
 	protected void processAtFeesAndStates() throws DataException {
-		final String tag = "[AT.apply.fees]";
-		final int blockHeight = this.blockData.getHeight();
 		ATRepository atRepository = this.repository.getATRepository();
 
 		// Safety check: ourAtStates should have been populated during validation
@@ -2270,7 +2149,6 @@ public class Block {
 
 			inst.apply_fees_wallTotalNanos += System.nanoTime() - wallStart;
 
-			inst.logProcessAtFeesAndStates(LOGGER, tag, blockHeight);
 		} finally {
 			ATExecInstrumentation.unbind();
 		}
@@ -2378,29 +2256,6 @@ public class Block {
 		this.repository.getATRepository().recomputeATExecutionQueueForATs(affectedATs);
 		recomputeAtExecutionQueueNanos = System.nanoTime() - t;
 
-		long summedNanos = saveBlockTransactionsNanos + updateHeightNanos + updateSequenceNanos
-				+ confirmTransactionNanos + getInvolvedAddressesNanos + saveParticipantsNanos
-				+ recordAtIncomingNanos + recomputeAtNextIncomingNanos + recomputeAtExecutionQueueNanos;
-
-		LOGGER.info("[Block.process.linkTx] blockHeight={} step=LINK_TRANSACTIONS_OVERVIEW total_summed_ms={} "
-						+ "save_block_transactions_ms={} update_height_ms={} update_sequence_ms={} "
-						+ "confirm_unconfirmed_delete_ms={} get_involved_addresses_ms={} save_participants_ms={} "
-						+ "record_at_incoming_ms={} recompute_at_next_incoming_ms={} recompute_at_execution_queue_ms={} "
-						+ "transaction_count={} participant_count={} affected_at_count={}",
-				this.blockData.getHeight(),
-				ATExecInstrumentation.ms(summedNanos),
-				ATExecInstrumentation.ms(saveBlockTransactionsNanos),
-				ATExecInstrumentation.ms(updateHeightNanos),
-				ATExecInstrumentation.ms(updateSequenceNanos),
-				ATExecInstrumentation.ms(confirmTransactionNanos),
-				ATExecInstrumentation.ms(getInvolvedAddressesNanos),
-				ATExecInstrumentation.ms(saveParticipantsNanos),
-				ATExecInstrumentation.ms(recordAtIncomingNanos),
-				ATExecInstrumentation.ms(recomputeAtNextIncomingNanos),
-				ATExecInstrumentation.ms(recomputeAtExecutionQueueNanos),
-				transactions.size(),
-				participantCount,
-				affectedATCount);
 	}
 
 	private static String getATIncomingRecipient(TransactionData transactionData) {

@@ -339,17 +339,11 @@ public class HSQLDBATRepository implements ATRepository {
 		Set<String> affectedATs = new LinkedHashSet<>(canonicalDueATs);
 		affectedATs.addAll(queuedDueATs);
 
-		LOGGER.error("AT execution queue mismatch at height {}: canonicalDue={}, queuedDue={}, repairing {} AT queue rows",
-				blockHeight, canonicalDueATs.size(), queuedDueATs.size(), affectedATs.size());
-
 		recomputeATExecutionQueueForATs(affectedATs);
 
 		Set<String> repairedQueuedDueATs = fetchQueuedDueATs(blockHeight);
-		if (!canonicalDueATs.equals(repairedQueuedDueATs)) {
-			LOGGER.error("AT execution queue still mismatched at height {} after repair: canonicalDue={}, queuedDue={}",
-					blockHeight, canonicalDueATs.size(), repairedQueuedDueATs.size());
+		if (!canonicalDueATs.equals(repairedQueuedDueATs))
 			rebuildATExecutionQueue();
-		}
 
 		repairedQueuedDueATs = fetchQueuedDueATs(blockHeight);
 		if (!canonicalDueATs.equals(repairedQueuedDueATs))
@@ -423,7 +417,6 @@ public class HSQLDBATRepository implements ATRepository {
 			if (executionQueueVerified)
 				return;
 
-			LOGGER.info("Rebuilding AT execution queue from runtime state - this can take a while...");
 			ensureRuntimeRowsExist();
 			rebuildATNextIncoming();
 			rebuildATExecutionQueue();
@@ -451,10 +444,7 @@ public class HSQLDBATRepository implements ATRepository {
 				+ "WHERE ATRuntime.AT_address IS NULL";
 
 		try {
-			int inserted = this.repository.executeCheckedUpdate(sql);
-			if (inserted > 0)
-				LOGGER.warn("Repaired {} missing ATRuntime rows before executable AT lookup", inserted);
-
+			this.repository.executeCheckedUpdate(sql);
 			this.runtimeRowsVerified = true;
 		} catch (SQLException e) {
 			throw new DataException("Unable to verify AT runtime rows", e);
@@ -715,9 +705,6 @@ public class HSQLDBATRepository implements ATRepository {
 
 			for (ATData missingRuntimeRow : missingRuntimeRows)
 				saveRuntimeState(missingRuntimeRow, currentStateHeight);
-
-			if (!missingRuntimeRows.isEmpty())
-				LOGGER.warn("Repaired {} missing ATRuntime rows during batch runtime update", missingRuntimeRows.size());
 		} catch (SQLException e) {
 			throw new DataException("Unable to batch update AT runtime states", this.repository.examineException(e));
 		} finally {
@@ -1203,7 +1190,6 @@ public class HSQLDBATRepository implements ATRepository {
 			return;
 		}
 
-		LOGGER.warn("Falling back to historical AT current-state scan for {} because deleted state row has no previous_height", atAddress);
 		revertCurrentATState(atAddress);
 	}
 
@@ -2127,8 +2113,6 @@ public class HSQLDBATRepository implements ATRepository {
 		if (previousHeight < atStateData.getHeight())
 			return previousHeight;
 
-		LOGGER.warn("Ignoring invalid precomputed previous AT state height {} for {} at height {}; using repository lookup",
-				previousHeight, atStateData.getATAddress(), atStateData.getHeight());
 		return null;
 	}
 

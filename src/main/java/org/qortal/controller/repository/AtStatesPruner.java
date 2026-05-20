@@ -47,8 +47,6 @@ public class AtStatesPruner implements Runnable {
 			} catch (InterruptedException e) {
 				if (Controller.isStopping())
 					return;
-
-				LOGGER.warn("AT States Pruning startup defer interrupted. Trying again.", e);
 			}
 		}
 

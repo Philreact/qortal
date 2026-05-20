@@ -445,7 +445,6 @@ public class ArbitraryDataStorageManager extends Thread {
                 return;
             }
 
-            long scanStartNanos = System.nanoTime();
             DirectorySizeResult dataDirectorySize = DirectorySizeResult.EMPTY;
             DirectorySizeResult tempDirectorySize = DirectorySizeResult.EMPTY;
 
@@ -465,14 +464,6 @@ public class ArbitraryDataStorageManager extends Thread {
                     totalSize += tempDirectorySize.size;
                 }
             }
-
-            LOGGER.info("QDN storage size scan completed in {} ms: dataFiles={}, dataDirs={}, tempFiles={}, tempDirs={}, totalBytes={}",
-                    (System.nanoTime() - scanStartNanos) / 1_000_000L,
-                    dataDirectorySize.files,
-                    dataDirectorySize.directories,
-                    tempDirectorySize.files,
-                    tempDirectorySize.directories,
-                    totalSize);
 
             this.totalDirectorySize = totalSize;
             this.lastDirectorySizeCheck = now;
@@ -500,14 +491,7 @@ public class ArbitraryDataStorageManager extends Thread {
 
         Files.walkFileTree(path, EnumSet.noneOf(FileVisitOption.class), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
             @Override
-            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                result.directories++;
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                result.files++;
                 result.size += attrs.size();
                 return FileVisitResult.CONTINUE;
             }
@@ -525,8 +509,6 @@ public class ArbitraryDataStorageManager extends Thread {
         private static final DirectorySizeResult EMPTY = new DirectorySizeResult();
 
         private long size;
-        private long files;
-        private long directories;
     }
 
     private long getRemainingUsableStorageCapacity() throws IOException {

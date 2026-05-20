@@ -42,8 +42,6 @@ public class Synchronizer extends Thread {
 
 	private static final Logger LOGGER = LogManager.getLogger(Synchronizer.class);
 
-	private static final long SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS = 250_000_000L;
-
 	/** Max number of new blocks we aim to add to chain tip in each sync round */
 	private static final int SYNC_BATCH_SIZE = 1000; // XXX move to Settings?
 
@@ -1725,39 +1723,19 @@ public class Synchronizer extends Thread {
                 transactionCount += newBlock.getTransactions().size();
                 lastBatchHeight = ourHeight;
 
-                long blockTotalNanos = System.nanoTime() - blockStart;
-                if (blockTotalNanos >= SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS)
-                    LOGGER.info("[Synchronizer] mode=fast peer={} blockHeight={} step=SYNC_BLOCK_SLOW total_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} transaction_count={}",
-                            peer, expectedHeight,
-                            formatMillis(blockTotalNanos),
-                            formatMillis(blockSignatureValidationNanos),
-                            formatMillis(blockSetInitialApprovalNanos),
-                            formatMillis(blockIsValidOnlyNanos),
-                            formatMillis(blockSaveTransactionsNanos),
-                            formatMillis(blockProcessOnlyNanos),
-                            formatMillis(blockOnNewBlockOnlyNanos),
-                            newBlock.getTransactions().size());
-            }
+	            }
 
             if(errorInBatch) {  // if error
-                long tRollback = System.nanoTime();
-                repository.rollbackToSavepoint();
-                rollbackNanos = System.nanoTime() - tRollback;
-                logSyncBatchOverview("fast", peer, firstBatchHeight, lastBatchHeight, blocks.size(), processedBlockCount,
-                        transactionCount, batchStart, fetchBlocksNanos, setSavepointNanos, signatureValidationNanos,
-                        setRepositoryNanos, setInitialApprovalNanos, blockIsValidNanos, saveTransactionsNanos,
-                        blockProcessNanos, onNewBlockNanos, batchSaveChangesNanos, rollbackNanos, errorCode);
-                return errorCode;
-            }
+	                long tRollback = System.nanoTime();
+	                repository.rollbackToSavepoint();
+	                rollbackNanos = System.nanoTime() - tRollback;
+	                return errorCode;
+	            }
             else{
-                long tSaveChanges = System.nanoTime();
-                repository.saveChanges();
-                batchSaveChangesNanos = System.nanoTime() - tSaveChanges;
-                logSyncBatchOverview("fast", peer, firstBatchHeight, lastBatchHeight, blocks.size(), processedBlockCount,
-                        transactionCount, batchStart, fetchBlocksNanos, setSavepointNanos, signatureValidationNanos,
-                        setRepositoryNanos, setInitialApprovalNanos, blockIsValidNanos, saveTransactionsNanos,
-                        blockProcessNanos, onNewBlockNanos, batchSaveChangesNanos, rollbackNanos, SynchronizationResult.OK);
-            }
+	                long tSaveChanges = System.nanoTime();
+	                repository.saveChanges();
+	                batchSaveChangesNanos = System.nanoTime() - tSaveChanges;
+	            }
         }
         return SynchronizationResult.OK;
     }
@@ -1876,68 +1854,10 @@ public class Synchronizer extends Thread {
             Controller.getInstance().onNewBlock(newBlock.getBlockData());
             onNewBlockNanos = System.nanoTime() - tOnNewBlock;
 
-            long blockTotalNanos = System.nanoTime() - blockStart;
-            LOGGER.info("[Synchronizer] mode=slow peer={} first_height={} last_height={} requested_blocks=1 processed_blocks=1 transaction_count={} step=SYNC_BATCH_OVERVIEW total_ms={} fetch_signatures_ms={} fetch_block_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} batch_save_changes_ms={} avg_per_block_ms={} result={}",
-                    peer, expectedHeight, expectedHeight, newBlock.getTransactions().size(),
-                    formatMillis(blockTotalNanos),
-                    formatMillis(fetchSignaturesNanos),
-                    formatMillis(fetchBlockNanos),
-                    formatMillis(signatureValidationNanos),
-                    formatMillis(setInitialApprovalNanos),
-                    formatMillis(blockIsValidNanos),
-                    formatMillis(saveTransactionsNanos),
-                    formatMillis(blockProcessNanos),
-                    formatMillis(onNewBlockNanos),
-                    formatMillis(saveChangesNanos),
-                    formatMillis(blockTotalNanos),
-                    SynchronizationResult.OK);
-
-            if (blockTotalNanos >= SYNC_SLOW_BLOCK_LOG_THRESHOLD_NANOS)
-                LOGGER.info("[Synchronizer] mode=slow peer={} blockHeight={} step=SYNC_BLOCK_SLOW total_ms={} signature_validation_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} transaction_count={}",
-                        peer, expectedHeight,
-                        formatMillis(blockTotalNanos),
-                        formatMillis(signatureValidationNanos),
-                        formatMillis(setInitialApprovalNanos),
-                        formatMillis(blockIsValidNanos),
-                        formatMillis(saveTransactionsNanos),
-                        formatMillis(blockProcessNanos),
-                        formatMillis(onNewBlockNanos),
-                        newBlock.getTransactions().size());
-        }
+	        }
 
         return SynchronizationResult.OK;
     }
-
-	private void logSyncBatchOverview(String mode, Peer peer, int firstHeight, int lastHeight, int requestedBlockCount,
-			int processedBlockCount, int transactionCount, long batchStartNanos, long fetchBlocksNanos,
-			long setSavepointNanos, long signatureValidationNanos, long setRepositoryNanos,
-			long setInitialApprovalNanos, long blockIsValidNanos, long saveTransactionsNanos,
-			long blockProcessNanos, long onNewBlockNanos, long batchSaveChangesNanos, long rollbackNanos,
-			SynchronizationResult result) {
-		long totalNanos = System.nanoTime() - batchStartNanos;
-		long avgPerBlockNanos = processedBlockCount == 0 ? 0L : totalNanos / processedBlockCount;
-
-		LOGGER.info("[Synchronizer] mode={} peer={} first_height={} last_height={} requested_blocks={} processed_blocks={} transaction_count={} step=SYNC_BATCH_OVERVIEW total_ms={} fetch_blocks_ms={} set_savepoint_ms={} signature_validation_ms={} set_repository_ms={} set_initial_approval_ms={} block_is_valid_ms={} save_transactions_ms={} block_process_ms={} on_new_block_ms={} batch_save_changes_ms={} rollback_ms={} avg_per_block_ms={} result={}",
-				mode, peer, firstHeight, lastHeight, requestedBlockCount, processedBlockCount, transactionCount,
-				formatMillis(totalNanos),
-				formatMillis(fetchBlocksNanos),
-				formatMillis(setSavepointNanos),
-				formatMillis(signatureValidationNanos),
-				formatMillis(setRepositoryNanos),
-				formatMillis(setInitialApprovalNanos),
-				formatMillis(blockIsValidNanos),
-				formatMillis(saveTransactionsNanos),
-				formatMillis(blockProcessNanos),
-				formatMillis(onNewBlockNanos),
-				formatMillis(batchSaveChangesNanos),
-				formatMillis(rollbackNanos),
-				formatMillis(avgPerBlockNanos),
-				result);
-	}
-
-	private static String formatMillis(long nanoseconds) {
-		return String.format(Locale.ROOT, "%.3f", nanoseconds / 1_000_000.0);
-	}
 
 	private List<BlockSummaryData> getBlockSummaries(Peer peer, byte[] parentSignature, int numberRequested) throws InterruptedException {
 		Message getBlockSummariesMessage = new GetBlockSummariesMessage(parentSignature, numberRequested);

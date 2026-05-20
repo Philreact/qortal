@@ -1094,7 +1094,6 @@ public class HSQLDBDatabaseUpdates {
 							+ "block_height INTEGER, block_sequence INTEGER, signature Signature, "
 							+ "PRIMARY KEY (AT_address))");
 
-					LOGGER.info("Rebuilding AT incoming transaction cache - this can take a while...");
 					stmt.execute("DELETE FROM ATIncomingTransactions");
 					stmt.execute("INSERT INTO ATIncomingTransactions (AT_address, block_height, block_sequence, signature) "
 							+ "SELECT AT_address, block_height, block_sequence, signature FROM ("
@@ -1125,7 +1124,6 @@ public class HSQLDBDatabaseUpdates {
 							+ "PRIMARY KEY (AT_address))");
 					stmt.execute("CREATE INDEX IF NOT EXISTS ATStatesDataAddressHeightIndex ON ATStatesData (AT_address, height)");
 
-					LOGGER.info("Rebuilding AT current state pointer cache - this can take a while...");
 					stmt.execute("DELETE FROM ATCurrentState");
 					stmt.execute("INSERT INTO ATCurrentState (AT_address, height) "
 							+ "SELECT AT_address, MAX(height) "
@@ -1140,15 +1138,12 @@ public class HSQLDBDatabaseUpdates {
 					if (!columnExists(connection, "ATSTATES", "PREVIOUS_HEIGHT"))
 						stmt.execute("ALTER TABLE ATStates ADD previous_height INTEGER");
 
-					LOGGER.info("Skipping historical AT state previous-height backfill; new AT state rows will populate it going forward");
-
 					stmt.execute("CREATE TABLE IF NOT EXISTS ATStateBlobs ("
 							+ "state_hash ATStateHash NOT NULL, state_data ATState NOT NULL, "
 							+ "created_height INTEGER NOT NULL, state_data_length INTEGER NOT NULL, "
 							+ "PRIMARY KEY (state_hash))");
 					stmt.execute("SET TABLE ATStateBlobs NEW SPACE");
 
-					LOGGER.info("Backfilling content-addressed AT state blobs from legacy AT state data - this can take a while...");
 					try (ResultSet resultSet = stmt.executeQuery("SELECT ATStates.state_hash, ATStatesData.state_data, ATStates.height "
 							+ "FROM ATStates "
 							+ "JOIN ATStatesData USING (AT_address, height)");
@@ -1183,7 +1178,6 @@ public class HSQLDBDatabaseUpdates {
 
 					stmt.execute("CREATE INDEX IF NOT EXISTS ATsCurrentStateHeightIndex ON ATs (current_state_height)");
 
-					LOGGER.info("Backfilling AT runtime current-state heights from canonical AT state rows - this can take a while...");
 					stmt.execute("UPDATE ATs SET current_state_height = ("
 							+ "SELECT MAX(height) "
 							+ "FROM ATStates "
@@ -1209,7 +1203,6 @@ public class HSQLDBDatabaseUpdates {
 					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeSleepMessageIndex ON ATRuntime (sleep_until_message_timestamp)");
 					stmt.execute("CREATE INDEX IF NOT EXISTS ATRuntimeCurrentStateHeightIndex ON ATRuntime (current_state_height)");
 
-					LOGGER.info("Backfilling narrow AT runtime metadata table from ATs - this can take a while...");
 					stmt.execute("DELETE FROM ATRuntime");
 					stmt.execute("INSERT INTO ATRuntime (AT_address, is_sleeping, sleep_until_height, is_finished, had_fatal_error, "
 							+ "is_frozen, frozen_balance, sleep_until_message_timestamp, current_state_height) "

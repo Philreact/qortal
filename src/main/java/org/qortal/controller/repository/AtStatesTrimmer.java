@@ -34,8 +34,6 @@ public class AtStatesTrimmer implements Runnable {
 			} catch (InterruptedException e) {
 				if (Controller.isStopping())
 					return;
-
-				LOGGER.warn("AT States Trimming startup defer interrupted. Trying again.", e);
 			}
 		}
 
