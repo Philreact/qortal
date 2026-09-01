@@ -2,6 +2,7 @@ package org.qortal.controller.arbitrary;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.qortal.arbitrary.ArbitraryDataFolderSizeEstimator;
 import org.qortal.data.transaction.ArbitraryTransactionData;
 import org.qortal.data.transaction.TransactionData;
 import org.qortal.event.DataMonitorEvent;
@@ -24,7 +25,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -55,8 +55,14 @@ public class ArbitraryDataCleanupManager extends Thread {
 	 * Storage limits are re-checked after each batch, and there could be a significant
 	 * delay between the processing of each batch as it only occurs after a complete
 	 * cleanup cycle (to allow unwanted chunks to be deleted first).
+	 *
+	 * Above is the original comment. The batch size has been increased from 10 to 1000 and
+	 * it occurs multiple times within a cleanup cycle now. The original way was not cleaning
+	 * up data fast enough.
 	 */
-	private static final int CHUNK_DELETION_BATCH_SIZE = 10;
+	private static final int CHUNK_DELETION_BATCH_SIZE = 1000;
+
+	private static final long TRANSACTION_LIST_REFRESH_INTERVAL = 6 * 60 * 60 * 1000L; // 6 hours
 
 
 	/*
@@ -85,14 +91,17 @@ public class ArbitraryDataCleanupManager extends Thread {
 		int offset = 0;
 
 		List<ArbitraryTransactionData> allArbitraryTransactionsInDescendingOrder;
+		long listFetchedAt;
 
 		try (final Repository repository = RepositoryManager.getRepository()) {
 			allArbitraryTransactionsInDescendingOrder
 					= repository.getArbitraryRepository()
 					.getLatestArbitraryTransactions();
+			listFetchedAt = System.currentTimeMillis();
 		} catch( Exception e) {
 			LOGGER.error(e.getMessage(), e);
 			allArbitraryTransactionsInDescendingOrder = new ArrayList<>(0);
+			listFetchedAt = System.currentTimeMillis();
 		}
 
 		Set<ArbitraryTransactionDataHashWrapper> processedTransactions = new HashSet<>();
@@ -137,9 +146,12 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 					if (transactions == null || transactions.isEmpty()) {
 						offset = 0;
-						allArbitraryTransactionsInDescendingOrder
-								= repository.getArbitraryRepository()
-								.getLatestArbitraryTransactions();
+						if (System.currentTimeMillis() - listFetchedAt >= TRANSACTION_LIST_REFRESH_INTERVAL) {
+							allArbitraryTransactionsInDescendingOrder
+									= repository.getArbitraryRepository()
+									.getLatestArbitraryTransactions();
+							listFetchedAt = System.currentTimeMillis();
+						}
 						transactions = allArbitraryTransactionsInDescendingOrder.stream().limit(limit).collect(Collectors.toList());
 						processedTransactions.clear();
 					}
@@ -291,29 +303,25 @@ public class ArbitraryDataCleanupManager extends Thread {
 					LOGGER.error("Repository issue when fetching arbitrary transaction data", e);
 				}
 
-				try (final Repository repository = RepositoryManager.getRepository()) {
+				// Check if there are any hosted files that don't have matching transactions
+				// UPDATE: This has been disabled for now as it was deleting valid transactions
+				// and causing chunks to go missing on the network. If ever re-enabled, we MUST
+				// ensure that original copies of data aren't deleted, and that sufficient time
+				// is allowed (ideally several hours) before treating a transaction as missing.
+				// this.checkForExpiredTransactions(repository);
 
-					// Check if there are any hosted files that don't have matching transactions
-					// UPDATE: This has been disabled for now as it was deleting valid transactions
-					// and causing chunks to go missing on the network. If ever re-enabled, we MUST
-					// ensure that original copies of data aren't deleted, and that sufficient time
-					// is allowed (ideally several hours) before treating a transaction as missing.
-					// this.checkForExpiredTransactions(repository);
+				// Delete additional data at random if we're over our storage limit
+				// Use the DELETION_THRESHOLD so that we only start deleting once the hard limit is reached
+				// This also allows some headroom between the regular threshold (90%) and the hard
+				// limit, to avoid data getting into a fetch/delete loop.
+				if (!storageManager.isStorageSpaceAvailable(DELETION_THRESHOLD)) {
 
-					// Delete additional data at random if we're over our storage limit
-					// Use the DELETION_THRESHOLD so that we only start deleting once the hard limit is reached
-					// This also allows some headroom between the regular threshold (90%) and the hard
-					// limit, to avoid data getting into a fetch/delete loop.
-					if (!storageManager.isStorageSpaceAvailable(DELETION_THRESHOLD)) {
+					LOGGER.info("no storage space available");
 
-						// Rate limit, to avoid repeated calls to calculateDirectorySize()
-						Thread.sleep(60000);
-						// Now delete some data at random
-						this.storageLimitReached(repository);
-					}
-
-				} catch (DataException e) {
-					LOGGER.error("Repository issue when cleaning up arbitrary transaction data", e);
+					// Rate limit, to avoid repeated calls to calculateDirectorySize()
+					Thread.sleep(10000);
+					// Now delete some data at random
+					this.storageLimitReached();
 				}
 			}
 		} catch (InterruptedException e) {
@@ -365,16 +373,10 @@ public class ArbitraryDataCleanupManager extends Thread {
 		}
 	}
 
-	private void storageLimitReached(Repository repository) throws InterruptedException {
+	private void storageLimitReached() throws InterruptedException {
 		// We think that the storage limit has been reached
 
-		// Now calculate the used/total storage again, as a safety precaution
-		Long now = NTP.getTime();
-		ArbitraryDataStorageManager.getInstance().calculateDirectorySize(now);
-		if (ArbitraryDataStorageManager.getInstance().isStorageSpaceAvailable(DELETION_THRESHOLD)) {
-			// We have space available, so don't delete anything
-			return;
-		}
+		LOGGER.info("no storage space available, proceed to delete");
 
 		// Delete a batch of random chunks
 		// This reduces the chance of too many nodes deleting the same chunk
@@ -384,7 +386,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 			if (isStopping) {
 				return;
 			}
-			this.deleteRandomFile(repository, dataPath.toFile(), null);
+			this.deleteRandomFile(dataPath.toFile());
 		}
 
 		// FUTURE: consider reducing the expiry time of the reader cache
@@ -400,7 +402,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 	 * @param directory - the base directory
 	 * @return boolean - whether a file was deleted
 	 */
-	private boolean deleteRandomFile(Repository repository, File directory, String name) {
+	private boolean deleteRandomFile(File directory) {
 		Path tempDataPath = Paths.get(Settings.getInstance().getTempDataPath());
 
 		// Pick a random directory
@@ -426,7 +428,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 			// If it's a directory, iteratively repeat the process
 			if (randomItem.isDirectory()) {
-				return this.deleteRandomFile(repository, randomItem, name);
+				return this.deleteRandomFile(randomItem);
 			}
 
 			// If it's a file, we might be able to delete it
@@ -441,36 +443,14 @@ public class ArbitraryDataCleanupManager extends Thread {
 					return false;
 				}
 
-				if (name != null) {
-					// A name has been specified, so we need to make sure this file relates to
-					// the name we want to delete. The signature should be the name of parent directory.
-					try {
-						Path parentFileNamePath = randomItem.toPath().toAbsolutePath().getParent().getFileName();
-						if (parentFileNamePath != null) {
-							String signature58 = parentFileNamePath.toString();
-							byte[] signature = Base58.decode(signature58);
-							TransactionData transactionData = repository.getTransactionRepository().fromSignature(signature);
-							if (transactionData == null || transactionData.getType() != Transaction.TransactionType.ARBITRARY) {
-								// Not what we were expecting, so don't delete it
-								return false;
-							}
-							ArbitraryTransactionData arbitraryTransactionData = (ArbitraryTransactionData) transactionData;
-							if (!Objects.equals(arbitraryTransactionData.getName(), name)) {
-								// Relates to a different name - don't delete it
-								return false;
-							}
-						}
-
-					} catch (DataException e) {
-						// Something went wrong and we weren't able to make a decision - so it's best not to delete this file
-						return false;
-					}
-				}
-
 				LOGGER.debug("Deleting random file {} because we have reached max storage capacity...", randomItem.toString());
-				fireRandomItemDeletionNotification(randomItem, repository, "Deleting random file, because we have reached max storage capacity");
+
+				long diskUsage = FilesystemUtils.getDiskUsage(randomItem);
+
 				boolean success = randomItem.delete();
 				if (success) {
+
+					ArbitraryDataFolderSizeEstimator.getInstance().subtract(diskUsage);
 					try {
 						FilesystemUtils.safeDeleteEmptyParentDirectories(randomItem.toPath().getParent());
 					} catch (IOException e) {
@@ -528,7 +508,7 @@ public class ArbitraryDataCleanupManager extends Thread {
 
 				// We're expecting the contents of each subfolder to be a directory
 				if (directory.isDirectory()) {
-					if (!ArbitraryTransactionUtils.isFileRecent(directory.toPath(), now, minAge)) {
+					if (!FilesystemUtils.isFileRecent(directory.toPath(), now, minAge)) {
 						// File isn't recent, so can be deleted
 						this.safeDeleteDirectory(directory, "not recent");
 					}

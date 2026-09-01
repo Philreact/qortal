@@ -1,10 +1,7 @@
 package org.qortal.settings;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.Reader;
+import java.io.*;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -13,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
@@ -31,18 +29,13 @@ import org.eclipse.persistence.jaxb.UnmarshallerProperties;
 import org.qortal.block.BlockChain;
 import org.qortal.controller.arbitrary.ArbitraryDataStorageManager.StoragePolicy;
 import org.qortal.crosschain.Bitcoin.BitcoinNet;
-//import org.qortal.controller.BitcoinWalletController;
 import org.qortal.crosschain.Digibyte.DigibyteNet;
-//import org.qortal.controller.DigibyteWalletController;
 import org.qortal.crosschain.Dogecoin.DogecoinNet;
-//import org.qortal.controller.DogecoinWalletController;
-//import org.qortal.crosschain.Litecoin.LitecoinNet;
 import org.qortal.crosschain.Litecoin.*;
 import org.qortal.crosschain.Litecoin; 
 import org.qortal.crosschain.PirateChain.PirateChainNet;
 import org.qortal.controller.PirateChainWalletController;
 import org.qortal.crosschain.Ravencoin.RavencoinNet;
-//import org.qortal.controller.RavencoinWalletController;
 import org.qortal.network.message.MessageType;
 import org.qortal.utils.EnumUtils;
 
@@ -158,6 +151,11 @@ public class Settings {
 	/* How many blocks to cache locally. Defaulted to 10, which covers a typical Synchronizer request + a few spare - increased to 100 */
 	private int blockCacheSize = 100;
 
+	/** HSQLDB cache_rows: max rows kept in memory (default 50000). */
+	private int hsqldbCacheRows = 50000;
+	/** HSQLDB cache_size: max size of data cache in KB (default 65536 = 64MB). */
+	private int hsqldbCacheSize = 65536;
+
 	/** Maximum number of transactions for the block minter to include in a block */
 	private int maxTransactionsPerBlock = 100;
 
@@ -239,7 +237,7 @@ public class Settings {
 	public long recoveryModeTimeout = 9999999999999L;
 
 	/** Minimum peer version number required in order to sync with them */
-	private String minPeerVersion = "6.1.0";
+	private String minPeerVersion = "6.1.6";
 
 	/** Whether to allow connections with peers below minPeerVersion
 	 * If true, we won't sync with them but they can still sync with us, and will show in the peers list
@@ -281,6 +279,34 @@ public class Settings {
 
 	/** Wallets path - used for storing encrypted wallet caches for coins that require them */
 	private String walletsPath = "wallets";
+
+	/**
+	 * Exact QDN transaction containing the Pirate Chain LiteWallet JNI bundle.
+	 * A transaction signature is deliberately used here, rather than a mutable
+	 * name/identifier resource, so a node always loads the reviewed binary that
+	 * its operator selected.
+	 */
+	private String pirateChainWalletQdnSignature = PirateChainWalletController.DEFAULT_QDN_WALLET_SIGNATURE;
+
+	/**
+	 * Enables the Pirate Unified Wallet JNI storage model for the selected QDN
+	 * bundle. The default bundle is the reviewed Unified Wallet publication;
+	 * operators selecting a legacy bundle must explicitly disable this setting.
+	 */
+	private boolean pirateChainWalletUnified = true;
+
+	/**
+	 * Enables redacted diagnostics from the selected Pirate Unified Wallet JNI
+	 * bundle. Disabled by default because it is intended for isolated testing.
+	 */
+	private boolean pirateChainWalletDebugLogging = false;
+
+	/**
+	 * Optional birthday for a brand-new Pirate Unified Wallet. When omitted, a
+	 * fresh wallet begins at the current lightwallet height. Set this only when
+	 * recovering an address that could already have historical funds.
+	 */
+	private Integer arrrNewWalletBirthday = null;
 
 	private int arrrDefaultBirthday = 2000000;
 
@@ -589,7 +615,35 @@ public class Settings {
 	 */
     private  boolean hostMonitorEnabled = false;
 
-    // Domain mapping
+	/**
+	 * Thread Dump Interval
+	 *
+	 * The interval (in minutes) to perform a thread dump. If zero or less, then no thread dumps will be performed.
+	 */
+	private long threadDumpInterval = 0;
+
+	/**
+	 * Thread Dump Expiration
+	 *
+	 * The time (in hours) to elapse before a thread dump file will be deleted.
+	 */
+	private int threadDumpExpiration = 24;
+
+	/**
+	 * Data Storage Size Calculation Hour
+	 *
+	 * The local hour in the day to scan for the data directory size.
+	 */
+	private int dataStorageSizeCalculationHour = 23;
+
+	/**
+	 * Data Storage Size Calculation Frequency
+	 *
+	 * The time in days between each calculation.
+	 */
+	private int dataStorageSizeCalculationFrequency = 1;
+
+	// Domain mapping
 	public static class ThreadLimit {
 		private String messageType;
 		private Integer limit;
@@ -694,7 +748,7 @@ public class Settings {
 		try {
 			// Create JAXB context aware of Settings
 			jc = JAXBContextFactory.createContext(new Class[] {
-				Settings.class
+					Settings.class
 			}, null);
 
 			// Create unmarshaller
@@ -715,14 +769,28 @@ public class Settings {
 		String path = "";
 
 		do {
-			LOGGER.info(String.format("Using settings file: %s%s", path, filename));
+			// Use Path API to combine directory and filename safely for Windows/Linux/Mac
+			Path fullPath = Paths.get(path, filename);
+			LOGGER.info(String.format("Using settings file: %s", fullPath.toString()));
 
 			// Create the StreamSource by creating Reader to the JSON input
-			try (Reader settingsReader = new FileReader(path + filename)) {
-				StreamSource json = new StreamSource(settingsReader);
+			try (BufferedReader reader = new BufferedReader(new FileReader(fullPath.toFile()))) {
+				// settings reader is a JSON with Comments
 
-				// Attempt to unmarshal JSON stream to Settings
-				settings = unmarshaller.unmarshal(json, Settings.class).getValue();
+				// Need to skip or parse out the comment lines, any line that starts with a '#' is considered a comment
+				String rawJson = reader.lines()
+						.filter(line -> !line.trim().startsWith("#"))
+						.collect(Collectors.joining(System.lineSeparator()));
+
+				// Also handle the case where a line ends with a ',' before a closing '}' or ']'
+				String cleanJson = rawJson.replaceAll(",(?=\\s*[\\}\\]])", "");
+
+				try (StringReader stringReader = new StringReader(cleanJson)) {
+					StreamSource json = new StreamSource(stringReader);
+
+					// Attempt to unmarshal JSON stream to Settings
+					settings = unmarshaller.unmarshal(json, Settings.class).getValue();
+				}
 			} catch (FileNotFoundException e) {
 				String message = "Settings file not found: " + path + filename;
 				LOGGER.error(message, e);
@@ -752,9 +820,10 @@ public class Settings {
 				// Adjust filename and go round again
 				path = settings.userPath;
 
-				// Add trailing directory separator if needed
-				if (!path.endsWith(File.separator))
+				// Add trailing directory separator if needed (using Path API logic to ensure consistency)
+				if (!path.isEmpty() && !path.endsWith(File.separator)) {
 					path += File.separator;
+				}
 			}
 		} while (settings.userPath != null);
 
@@ -968,6 +1037,14 @@ public class Settings {
 		return this.blockCacheSize;
 	}
 
+	public int getHsqldbCacheRows() {
+		return this.hsqldbCacheRows;
+	}
+
+	public int getHsqldbCacheSize() {
+		return this.hsqldbCacheSize;
+	}
+
 	public int getMaxTransactionsPerBlock() {
 		return this.maxTransactionsPerBlock;
 	}
@@ -1152,6 +1229,22 @@ public class Settings {
 
 	public String getWalletsPath() {
 		return this.walletsPath;
+	}
+
+	public String getPirateChainWalletQdnSignature() {
+		return this.pirateChainWalletQdnSignature;
+	}
+
+	public boolean isPirateChainWalletUnified() {
+		return this.pirateChainWalletUnified;
+	}
+
+	public boolean isPirateChainWalletDebugLogging() {
+		return this.pirateChainWalletDebugLogging;
+	}
+
+	public Integer getArrrNewWalletBirthday() {
+		return this.arrrNewWalletBirthday;
 	}
 
 	public int getArrrDefaultBirthday() {
@@ -1520,5 +1613,21 @@ public class Settings {
 
 	public boolean isHostMonitorEnabled() {
 		return hostMonitorEnabled;
+	}
+
+	public long getThreadDumpInterval() {
+		return threadDumpInterval;
+	}
+
+	public int getThreadDumpExpiration() {
+		return threadDumpExpiration;
+	}
+
+	public int getDataStorageSizeCalculationHour() {
+		return dataStorageSizeCalculationHour;
+	}
+
+	public int getDataStorageSizeCalculationFrequency() {
+		return dataStorageSizeCalculationFrequency;
 	}
 }

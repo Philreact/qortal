@@ -101,7 +101,14 @@ public class Controller extends Thread {
 	public static final long MISBEHAVIOUR_COOLOFF = 10 * 60 * 1000L; // ms
 	private static final int MAX_BLOCKCHAIN_TIP_AGE = 5; // blocks
 	private static final Object shutdownLock = new Object();
-	private static final String repositoryUrlTemplate = "jdbc:hsqldb:file:%s" + File.separator + "blockchain;create=true;hsqldb.full_log_replay=true";
+	private static String buildRepositoryUrl(String path) {
+		int cacheRows = Settings.getInstance().getHsqldbCacheRows();
+		int cacheSize = Settings.getInstance().getHsqldbCacheSize();
+		return "jdbc:hsqldb:file:" + path + File.separator
+				+ "blockchain;create=true;hsqldb.full_log_replay=true"
+				+ ";hsqldb.cache_rows=" + cacheRows
+				+ ";hsqldb.cache_size=" + cacheSize;
+	}
 	private static final long NTP_PRE_SYNC_CHECK_PERIOD = 5 * 1000L; // ms
 	private static final long NTP_POST_SYNC_CHECK_PERIOD = 5 * 60 * 1000L; // ms
 	private static final long DELETE_EXPIRED_INTERVAL = 5 * 60 * 1000L; // ms
@@ -323,7 +330,7 @@ public class Controller extends Thread {
 	// Getters / setters
 
 	public static String getRepositoryUrl() {
-		return String.format(repositoryUrlTemplate, Settings.getInstance().getRepositoryPath());
+		return buildRepositoryUrl(Settings.getInstance().getRepositoryPath());
 	}
 
 	public long getBuildTimestamp() {
@@ -434,8 +441,10 @@ public class Controller extends Thread {
 			NTP.start(Settings.getInstance().getNtpServers());
 
 		LOGGER.info("Starting repository");
+		LOGGER.debug("Repository URL: {}", getRepositoryUrl());
 		try {
 			HSQLDBRepositoryFactory repositoryFactory = new HSQLDBRepositoryFactory(getRepositoryUrl());
+
 			RepositoryManager.setRepositoryFactory(repositoryFactory);
 			RepositoryManager.setRequestedCheckpoint(Boolean.TRUE);
 
@@ -444,15 +453,6 @@ public class Controller extends Thread {
 				ArbitraryDataCacheManager.getInstance().buildArbitraryResourcesCache(repository, false);
 			}
 
-
-			if( Settings.getInstance().isDbCacheEnabled() ) {
-				LOGGER.info("Starting Db Cache...");
-				HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
-				hsqldbDataCacheManager.start();
-			}
-			else {
-				LOGGER.info("Db Cache Disabled");
-			}
 
 			if (Settings.getInstance().getArbitraryIndexingPriority() > 0 ) {
 				LOGGER.info("Arbitrary Indexing Starting ...");
@@ -577,6 +577,9 @@ public class Controller extends Thread {
 		LOGGER.info("Starting trade-bot");
 		TradeBot.getInstance();
 
+		LOGGER.info("Starting chat delegate");
+		ChatTransactionDelegate.getInstance();
+
 		// Arbitrary data controllers
 		LOGGER.info("Starting arbitrary-transaction controllers");
 		ArbitraryDataManager.getInstance().start();
@@ -619,6 +622,15 @@ public class Controller extends Thread {
         if( Settings.getInstance().isWalletEnabled("ARRR")) {
             PirateChainWalletController.getInstance().start();
         }
+
+	    if( Settings.getInstance().isDbCacheEnabled() ) {
+				LOGGER.info("Starting Db Cache...");
+				HSQLDBDataCacheManager hsqldbDataCacheManager = new HSQLDBDataCacheManager();
+				hsqldbDataCacheManager.start();
+		}
+		else {
+				LOGGER.info("Db Cache Disabled");
+		}
 
 		LOGGER.info(String.format("Starting API on port %d", Settings.getInstance().getApiPort()));
 		try {
@@ -775,6 +787,12 @@ public class Controller extends Thread {
 				}
 			}
 		}, 3*60*1000, 3*60*1000);
+
+		if( Settings.getInstance().getThreadDumpInterval() > 0 ) {
+
+			LOGGER.info("Starting Thread Dump Scheduler ...");
+			ThreadDumpScheduler.getInstance().start();
+		}
 	}
 
 	/** Called by AdvancedInstaller's launch EXE in single-instance mode, when an instance is already running. */
@@ -1208,6 +1226,10 @@ public class Controller extends Thread {
 					AutoUpdate.getInstance().shutdown();
 				}
 
+				// Chat
+				LOGGER.info("Shutting down chat delegate");
+				ChatTransactionDelegate.getInstance().shutdown();
+
 			// Arbitrary data controllers
 			LOGGER.info("Shutting down arbitrary-transaction controllers");
 			ArbitraryDataManager.getInstance().shutdown();
@@ -1289,6 +1311,9 @@ public class Controller extends Thread {
 				if (blockchainLock.isHeldByCurrentThread()) {
 					blockchainLock.unlock();
 				}
+
+				// if thread dumps are scheduled, then this will shutdown
+				ThreadDumpScheduler.getInstance().shutdown();
 
 				LOGGER.info("Shutting down NTP");
 				NTP.shutdownNow();
@@ -1740,26 +1765,39 @@ public class Controller extends Thread {
 
 			for( BlockData blockData : blockDataList) {
 
-				if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
+				try {
+					if (PruneManager.getInstance().isBlockPruned(blockData.getHeight())) {
 
-					// If this is a pruned block, we likely only have partial data, so best not to sent it
-					continue;
-				}
+						// If this is a pruned block, we likely only have partial data, so best not to sent it
+						continue;
+					}
 
-				String signature58 = Base58.encode(blockData.getSignature());
+					String signature58 = Base58.encode(blockData.getSignature());
 
-				PeerMessage peerMessage = toProcessBySignature58.get(signature58);
+					PeerMessage peerMessage = toProcessBySignature58.get(signature58);
 
-				Message message = peerMessage.getMessage();
-				Peer peer = peerMessage.getPeer();
+					Message message = peerMessage.getMessage();
+					Peer peer = peerMessage.getPeer();
 
-				signature58Processed.add(signature58);
+					signature58Processed.add(signature58);
 
-				Block block = new Block(repository, blockData);
+					Block block = new Block(repository, blockData);
 
-				// V2 support
-				if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
-					Message blockMessage = new BlockV2Message(block);
+					// V2 support
+					if (peer.getPeersVersion() >= BlockV2Message.MIN_PEER_VERSION) {
+						Message blockMessage = new BlockV2Message(block);
+						blockMessage.setId(message.getId());
+
+						if (!peer.sendMessage(blockMessage)) {
+							peer.disconnect("failed to send block");
+							// Don't fall-through to caching because failure to send might be from failure to build message
+							continue;
+						}
+
+						continue;
+					}
+
+					CachedBlockMessage blockMessage = new CachedBlockMessage(block);
 					blockMessage.setId(message.getId());
 
 					if (!peer.sendMessage(blockMessage)) {
@@ -1768,25 +1806,18 @@ public class Controller extends Thread {
 						continue;
 					}
 
-					continue;
-				}
+					int blockCacheSize = Settings.getInstance().getBlockCacheSize();
 
-				CachedBlockMessage blockMessage = new CachedBlockMessage(block);
-				blockMessage.setId(message.getId());
+					// If request is for a recent block, cache it
+					if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
+						this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
 
-				if (!peer.sendMessage(blockMessage)) {
-					peer.disconnect("failed to send block");
-					// Don't fall-through to caching because failure to send might be from failure to build message
-					continue;
-				}
-
-				int blockCacheSize = Settings.getInstance().getBlockCacheSize();
-
-				// If request is for a recent block, cache it
-				if (getChainHeight() - blockData.getHeight() <= blockCacheSize) {
-					this.stats.getBlockMessageStats.cacheFills.incrementAndGet();
-
-					this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+						this.blockMessageCache.put(ByteArray.wrap(blockData.getSignature()), blockMessage);
+					}
+				} catch (IllegalStateException e) {
+					LOGGER.warn(e.getMessage());
+				} catch (Exception e) {
+					LOGGER.error(e.getMessage(), e);
 				}
 			}
 
