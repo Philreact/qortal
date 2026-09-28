@@ -34,6 +34,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Timer;
@@ -108,6 +109,7 @@ public class HSQLDBCacheUtils {
             String description,
             boolean prefixOnly,
             List<String> exactMatchNames,
+            List<String> keywords,
             boolean defaultResource,
             SearchMode mode,
             Integer minLevel,
@@ -121,20 +123,11 @@ public class HSQLDBCacheUtils {
             Integer offset,
             Boolean reverse) {
 
-        List<ArbitraryResourceData> candidates = new ArrayList<>();
+        if (service == null)
+            return new ArrayList<>();
 
-        // cache all results for requested service
-        if( service != null ) {
-            synchronized (cache.getDataByService()) {
-                Map<String, ArbitraryResourceData> serviceMap = cache.getDataByService().get(service.value);
-                if (serviceMap != null) {
-                    candidates.addAll(serviceMap.values());
-                }
-            }
-        }
-        // if no requested, then empty cache
-
-        return candidates;
+        return cache.indexedCandidates(service.value, query, identifier, names, title, description,
+                prefixOnly, exactMatchNames, keywords, defaultResource);
     }
 
     /**
@@ -201,11 +194,14 @@ public class HSQLDBCacheUtils {
             stream = stream.filter( candidate -> candidate.created < before.get().longValue() );
         }
 
-        if(exclude.isPresent())
-            stream = stream.filter( candidate -> !exclude.get().get().contains( candidate.name ));
+        if(exclude.isPresent()) {
+            List<String> excludedNames = exclude.get().get();
+            stream = stream.filter(candidate -> !excludedNames.contains(candidate.name));
+        }
 
         if( includeOnly.isPresent()) {
-            stream = stream.filter( candidate -> includeOnly.get().get().contains( candidate.name ));
+            List<String> includedNames = includeOnly.get().get();
+            stream = stream.filter(candidate -> includedNames.contains(candidate.name));
         }
 
         // filter by service
@@ -234,31 +230,17 @@ public class HSQLDBCacheUtils {
         stream = filterTerm(title, data -> data.metadata != null ? data.metadata.getTitle() : null, prefixOnly, stream);
         stream = filterTerm(description, data -> data.metadata != null ? data.metadata.getDescription() : null, prefixOnly, stream);
 
-        // New: Filter by keywords if provided
+        // Filter by keywords if provided. Do this once and compare without allocating a
+        // second lower-case copy during the duplicate pass that used to run here.
         if (keywords.isPresent() && !keywords.get().isEmpty()) {
             List<String> searchKeywords = keywords.get().stream()
-                .map(String::toLowerCase)
-                .collect(Collectors.toList());
-
-            stream = stream.filter(candidate -> {
-                
-                if (candidate.metadata != null && candidate.metadata.getDescription() != null) {
-                    String descriptionLower = candidate.metadata.getDescription().toLowerCase();
-                    return searchKeywords.stream().anyMatch(descriptionLower::contains);
-                }
-                return false;
-            });
-        }
-
-        if (keywords.isPresent() && !keywords.get().isEmpty()) {
-            List<String> searchKeywords = keywords.get().stream()
-                .map(String::toLowerCase)
-                .collect(Collectors.toList());
+                    .map(keyword -> keyword.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toList());
 
             stream = stream.filter(candidate -> {
                 if (candidate.metadata != null && candidate.metadata.getDescription() != null) {
-            String descriptionLower = candidate.metadata.getDescription().toLowerCase();
-            return searchKeywords.stream().anyMatch(descriptionLower::contains);
+                    String candidateDescription = candidate.metadata.getDescription().toLowerCase(Locale.ROOT);
+                    return searchKeywords.stream().anyMatch(candidateDescription::contains);
                 }
                 return false;
             });
@@ -585,11 +567,12 @@ public class HSQLDBCacheUtils {
     }
 
     private static Predicate<String> getContainsPredicate(String term) {
-        return value -> value != null && value.toLowerCase().contains(term.toLowerCase());
+        String normalizedTerm = term.toLowerCase(Locale.ROOT);
+        return value -> value != null && value.toLowerCase(Locale.ROOT).contains(normalizedTerm);
     }
 
     private static Predicate<String> getPrefixPredicate(String term) {
-        return value -> value != null && value.toLowerCase().startsWith(term.toLowerCase());
+        return value -> value != null && value.regionMatches(true, 0, term, 0, term.length());
     }
 
     /**
@@ -867,11 +850,7 @@ public class HSQLDBCacheUtils {
                     .put(ArbitraryResourceCache.resourceKey(data.name, data.identifier), data);
             }
 
-            // lock, clear and refill
-            synchronized (cache.getDataByService()) {
-                cache.getDataByService().clear();
-                cache.getDataByService().putAll(dataByService);
-            }
+            cache.replaceAll(dataByService);
 
             fillNamepMap(cache.getLevelByName(), repository);
         }

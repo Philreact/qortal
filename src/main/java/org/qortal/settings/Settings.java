@@ -155,6 +155,9 @@ public class Settings {
 	private int hsqldbCacheRows = 50000;
 	/** HSQLDB cache_size: max size of data cache in KB (default 65536 = 64MB). */
 	private int hsqldbCacheSize = 65536;
+    /** Redo-log checkpoint threshold in MiB; logging remains enabled. */
+    private int hsqldbLogSize = 256;
+    public int getHsqldbLogSize() { return hsqldbLogSize; }
 
 	/** Maximum number of transactions for the block minter to include in a block */
 	private int maxTransactionsPerBlock = 100;
@@ -315,6 +318,7 @@ public class Settings {
 	private Long slowQueryThreshold = null;
 	/** Repository storage path. */
 	private String repositoryPath = "db";
+
 	/** Repository connection pool size. Needs to be a bit bigger than maxNetworkThreadPoolSize */
 	private int repositoryConnectionPoolSize = 1920;
 	private List<String> fixedNetwork;
@@ -849,6 +853,10 @@ public class Settings {
 
 	private void validate() {
 		// Validation goes here
+        if (hsqldbLogSize < 32 || hsqldbLogSize > 4096)
+            throwValidationError("HSQLDB log size must be 32..4096 MiB");
+        if (hsqldbCacheSize < 1024 || hsqldbCacheSize > 1048576 || hsqldbCacheRows < 1000 || hsqldbCacheRows > 4000000)
+            throwValidationError("Repository cache must be 1024..1048576 KiB and 1000..4000000 rows");
 		if (this.minBlockchainPeers < 1 && !singleNodeTestnet)
 			throwValidationError("minBlockchainPeers must be at least 1");
 
@@ -881,6 +889,7 @@ public class Settings {
 		maxThreadsPerMessageType.add(new ThreadLimit("GET_TRANSACTION", 50));
 		maxThreadsPerMessageType.add(new ThreadLimit("TRANSACTION_SIGNATURES", 50));
 		maxThreadsPerMessageType.add(new ThreadLimit("TRADE_PRESENCES", 50));
+		maxThreadsPerMessageType.add(new ThreadLimit("GET_BLOCKS", 8));
 	}
 
 	// Getters / setters

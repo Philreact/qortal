@@ -1,0 +1,14 @@
+2026-09-25 00:23:40 INFO  Settings:778 - Using settings file: settings.json
+2026-09-25 00:23:40 ERROR Settings:800 - Settings file not found: settings.json
+java.io.FileNotFoundException: settings.json (No such file or directory)
+	at java.base/java.io.FileInputStream.open0(Native Method) ~[?:?]
+	at java.base/java.io.FileInputStream.open(FileInputStream.java:216) ~[?:?]
+	at java.base/java.io.FileInputStream.<init>(FileInputStream.java:157) ~[?:?]
+	at java.base/java.io.FileReader.<init>(FileReader.java:75) ~[?:?]
+	at org.qortal.settings.Settings.fileInstance(Settings.java:781) [qortal-6.1.9.jar:?]
+	at org.qortal.settings.Settings.getInstance(Settings.java:728) [qortal-6.1.9.jar:?]
+	at org.qortal.block.BlockChain.getInstance(BlockChain.java:304) [qortal-6.1.9.jar:?]
+	at org.qortal.transform.block.BlockTransformer.fromByteBuffer(BlockTransformer.java:110) [qortal-6.1.9.jar:?]
+	at org.qortal.transform.block.BlockTransformer.fromByteBufferV2(BlockTransformer.java:93) [qortal-6.1.9.jar:?]
+	at ArchiveBatchBench.convert(ArchiveBatchBench.java:32) [tmp/:?]
+	at ArchiveBatchBench.main(ArchiveBatchBench.java:40) [tmp/:?]

@@ -183,6 +183,7 @@ public class ArbitraryDataReader {
      * @param overwrite - set to true to force rebuild an existing cache
      */
     public void loadSynchronously(boolean overwrite) throws DataException, IOException, MissingDataException {
+        boolean buildStarted = false;
         try {
             ArbitraryDataCache cache = new ArbitraryDataCache(this.uncompressedPath, overwrite,
                     this.resourceId, this.resourceIdType, this.service, this.identifier);
@@ -244,6 +245,7 @@ public class ArbitraryDataReader {
             }
 
             this.preExecute();
+            buildStarted = true;
             this.deleteExistingFiles();
             this.fetch();
             this.decrypt();
@@ -269,16 +271,16 @@ public class ArbitraryDataReader {
             throw e;
 
         } finally {
-            this.postExecute();
+            if (buildStarted)
+                this.postExecute();
         }
     }
 
     private void preExecute() throws DataException {
-        ArbitraryDataBuildManager.getInstance().setBuildInProgress(true);
-
         this.checkEnabled();
         this.createWorkingDirectory();
         this.createUncompressedDirectory();
+        ArbitraryDataBuildManager.getInstance().setBuildInProgress(true);
     }
 
     private void postExecute() {

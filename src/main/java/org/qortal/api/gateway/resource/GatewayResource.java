@@ -13,9 +13,6 @@ import org.qortal.arbitrary.ArbitraryDataRenderer;
 import org.qortal.arbitrary.ArbitraryDataResource;
 import org.qortal.arbitrary.misc.Service;
 import org.qortal.data.arbitrary.ArbitraryResourceStatus;
-import org.qortal.repository.DataException;
-import org.qortal.repository.Repository;
-import org.qortal.repository.RepositoryManager;
 
 import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServletRequest;
@@ -52,13 +49,8 @@ public class GatewayResource {
             }
         }
 
-        try (final Repository repository = RepositoryManager.getRepository()) {
-            ArbitraryDataResource resource = new ArbitraryDataResource(name, ResourceIdType.NAME, service, identifier);
-            return resource.getStatus(repository);
-
-        } catch (DataException e) {
-            throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
-        }
+		ArbitraryDataResource resource = new ArbitraryDataResource(name, ResourceIdType.NAME, service, identifier);
+		return resource.getStatusAndUpdateCache(false);
     }
 
 
