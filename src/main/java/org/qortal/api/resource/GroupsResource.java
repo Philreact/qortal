@@ -12,6 +12,7 @@ import org.qortal.api.ApiError;
 import org.qortal.api.ApiErrors;
 import org.qortal.api.ApiExceptionFactory;
 import org.qortal.api.model.GroupKickInfo;
+import org.qortal.api.model.GroupMembershipValidation;
 import org.qortal.api.model.GroupMembers;
 import org.qortal.api.model.GroupMembers.MemberInfo;
 import org.qortal.api.model.GroupWithJoinRequests;
@@ -34,9 +35,11 @@ import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -77,6 +80,45 @@ public class GroupsResource {
 					// Exclude memberCount for this group
 				}
 			});
+			try {
+				List<String> owners = allGroupData.stream().map(GroupData::getOwner).distinct().collect(Collectors.toList());
+				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(owners);
+				allGroupData.forEach(g -> g.setOwnerPrimaryName(primaryNamesByOwner.get(g.getOwner())));
+			} catch (DataException e) {
+				// Leave ownerPrimaryName null
+			}
+
+			return allGroupData;
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/balances")
+	@Operation(
+			summary = "List all group balances",
+			responses = {
+					@ApiResponse(
+							description = "group balance info",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = GroupBalanceData.class))
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupBalanceData> getAllGroupBalances(@Parameter(
+			ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+			ref = "offset"
+	) @QueryParam("offset") Integer offset, @Parameter(
+			ref = "reverse"
+	) @QueryParam("reverse") Boolean reverse) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			List<GroupBalanceData> allGroupData = repository.getGroupRepository().getGroupMemberBalances(limit, offset, reverse);
+
 			try {
 				List<String> owners = allGroupData.stream().map(GroupData::getOwner).distinct().collect(Collectors.toList());
 				Map<String, String> primaryNamesByOwner = repository.getNameRepository().getPrimaryNamesByOwners(owners);
@@ -313,6 +355,59 @@ public class GroupsResource {
 			}
 
 			return new GroupMembers(membersInfo, memberCount, adminCount);
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@POST
+	@Path("/members/{groupid}/validate")
+	@Operation(
+		summary = "Validate group membership for a list of addresses",
+		requestBody = @RequestBody(
+			required = true,
+			content = @Content(
+				mediaType = MediaType.APPLICATION_JSON,
+				array = @ArraySchema(schema = @Schema(implementation = String.class))
+			)
+		),
+		responses = {
+			@ApiResponse(
+				description = "membership validation results",
+				content = @Content(
+					mediaType = MediaType.APPLICATION_JSON,
+					array = @ArraySchema(schema = @Schema(implementation = GroupMembershipValidation.class))
+				)
+			)
+		}
+	)
+	@ApiErrors({ApiError.INVALID_ADDRESS, ApiError.GROUP_UNKNOWN, ApiError.REPOSITORY_ISSUE})
+	public List<GroupMembershipValidation> validateGroupMembership(@PathParam("groupid") int groupId, List<String> addresses) {
+		if (addresses == null)
+			addresses = Collections.emptyList();
+
+		Set<String> uniqueAddresses = new LinkedHashSet<>();
+		for (String address : addresses) {
+			if (!Crypto.isValidAddress(address))
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.INVALID_ADDRESS);
+
+			uniqueAddresses.add(address);
+		}
+
+		try (final Repository repository = RepositoryManager.getRepository()) {
+			if (!repository.getGroupRepository().groupExists(groupId))
+				throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.GROUP_UNKNOWN);
+
+			Set<String> memberAddresses = repository.getGroupRepository().getGroupMemberAddresses(groupId, uniqueAddresses);
+			Set<String> adminAddresses = repository.getGroupRepository().getGroupAdminAddresses(groupId, memberAddresses);
+
+			return addresses.stream()
+					.map(address -> {
+						boolean isMember = memberAddresses.contains(address);
+						Boolean isAdmin = isMember ? adminAddresses.contains(address) : null;
+						return new GroupMembershipValidation(address, isMember, isAdmin);
+					})
+					.collect(Collectors.toList());
 		} catch (DataException e) {
 			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
 		}
@@ -1083,4 +1178,115 @@ public class GroupsResource {
 		}
 	}
 
+	@GET
+	@Path("/topbans/{year}")
+	@Operation(
+			summary = "List the accounts with the most groups bans in the year.",
+			responses = {
+					@ApiResponse(
+							description = "the accounts with ban count",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = GroupMemberTransactionCounterData.class))
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupMemberTransactionCounterData> getTopBans(@PathParam("year") Integer year, @Parameter(
+			ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+			ref = "offset"
+	) @QueryParam("offset") Integer offset) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			return repository.getGroupRepository().getBanCountsForYear( year, limit, offset );
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/topkicks/{year}")
+	@Operation(
+			summary = "List the accounts with the most groups kicks in the year.",
+			responses = {
+					@ApiResponse(
+							description = "the accounts with kick count",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = GroupMemberTransactionCounterData.class))
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupMemberTransactionCounterData> getTopKicks(@PathParam("year") Integer year, @Parameter(
+			ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+			ref = "offset"
+	) @QueryParam("offset") Integer offset) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			return repository.getGroupRepository().getKickCountsForYear( year, limit, offset );
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/topjoins/{year}")
+	@Operation(
+			summary = "List the accounts with the most groups joins in the year.",
+			responses = {
+					@ApiResponse(
+							description = "the accounts with join count",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = GroupMemberTransactionCounterData.class))
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupMemberTransactionCounterData> getTopJoins(@PathParam("year") Integer year, @Parameter(
+			ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+			ref = "offset"
+	) @QueryParam("offset") Integer offset) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			return repository.getGroupRepository().getJoinCountsForYear( year, limit, offset );
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
+
+	@GET
+	@Path("/topleaves/{year}")
+	@Operation(
+			summary = "List the accounts with the most group leaves in the year.",
+			responses = {
+					@ApiResponse(
+							description = "the accounts with leave count",
+							content = @Content(
+									mediaType = MediaType.APPLICATION_JSON,
+									array = @ArraySchema(schema = @Schema(implementation = GroupMemberTransactionCounterData.class))
+							)
+					)
+			}
+	)
+	@ApiErrors({ApiError.REPOSITORY_ISSUE})
+	public List<GroupMemberTransactionCounterData> getTopLeaves(@PathParam("year") Integer year, @Parameter(
+			ref = "limit"
+	) @QueryParam("limit") Integer limit, @Parameter(
+			ref = "offset"
+	) @QueryParam("offset") Integer offset) {
+		try (final Repository repository = RepositoryManager.getRepository()) {
+
+			return repository.getGroupRepository().getLeaveCountsForYear( year, limit, offset );
+		} catch (DataException e) {
+			throw ApiExceptionFactory.INSTANCE.createException(request, ApiError.REPOSITORY_ISSUE, e);
+		}
+	}
 }

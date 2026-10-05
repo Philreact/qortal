@@ -1,5 +1,7 @@
 # Qortal Project - Qortal Core - Primary Repository
-The Qortal Core is the blockchain and node component of the overall project. It contains the primary API, and ability to make calls to create transactions, and interact with the Qortal Blockchain Network. 
+The Qortal Core is the blockchain and node component of the overall project. It contains the primary API, ability to make API calls to create transactions, publish data to QDN, and interact with the Qortal Blockchain Network. The Qortal Core does not maintain any private information such as private keys, thus creating essentially an 'air gapped by default' environment. Qortal Hub, the current 'primary' interface for the project, maintains encrypted private keys and submits only signed transactions to the Qortal Core for processing. 
+
+Qortal's model is decentralization (distributed/decentralized) first, meaning the primary method of accessing and utilizing the network, is to install the Qortal Core and Qortal Hub on a computer, and access by communication only to your local system.
 
 In order to run the Qortal Core, a machine with java 11+ installed is required. Minimum RAM specs will vary depending on settings, but as low as 4GB of RAM should be acceptable in most scenarios. 
 
@@ -7,9 +9,9 @@ Qortal is a complete infrastructure platform with a blockchain backend, it is ca
 
 Qortal contains extensive functionality geared toward complete decentralization of the digital world. Removal of 'middlemen' of any kind from all transactions, and ability to publish websites and applications that require no continual fees, on a name that is truly owned by the account that registered it, or purchased it from another. A single name on Qortal is capable of being both a namespace and a 'username'. That single name can have an application, website, public and private data, communications, authentication, the namespace itself and more, which can subsequently be sold to anyone else without the need to change any type of 'hosting' or DNS entries that do not exist, email that doesn't exist, etc. Maintaining the same functionality as those replaced features of web 2.0. 
 
-Over time Qortal has progressed into a fully featured environment catering to any and all types of people and organizations, and will continue to advance as time goes on. Brining more features, capability, device support, and availale replacements for web2.0. Ultimately building a new, completely user-controlled digital world without limits. 
+Over time Qortal has progressed into a fully featured environment catering to any and all types of people and organizations, and will continue to advance as time goes on. Bringing more features, capability, device support, and available replacements for web2.0. Ultimately building a new, completely user-controlled digital world without limits. 
 
-Qortal has no owner, no company on top of it, and is completely community built, run, and funded. A community-established and run group of developers known as the 'dev-group' or Qortal Development Group, make group_approval based decisions for the project's future. If you are a developer interested in assisting with the project, you meay reach out to the Qortal Development Group in any of the available Qortal community locations. Either on the Qortal network itself, or on one of the temporary centralized social media locations. 
+Qortal has no owner, no company on top of it, and is completely community built, run, and funded. A community-established and run group of developers known as the 'dev-group' or 'Qortal Development Group', make GROUP_APPROVAL based decisions for the project's future. If you are a developer interested in assisting with the project, you may reach out to the Qortal Development Group in any of the available Qortal community locations. Either on the Qortal network itself, or on one of the temporary centralized social media locations. 
 
 Building the future one block at a time. Welcome to Qortal. 
 

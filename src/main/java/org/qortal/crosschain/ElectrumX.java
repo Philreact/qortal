@@ -1,6 +1,6 @@
 package org.qortal.crosschain;
 
-import cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock;
+import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 import com.google.common.hash.HashCode;
 import com.google.common.primitives.Bytes;
 import org.apache.logging.log4j.LogManager;
@@ -613,6 +613,13 @@ public class ElectrumX extends BitcoinyBlockchainProvider {
 		if (!(rawBroadcastResult instanceof String))
 			throw new ForeignBlockchainException.NetworkException("Unexpected response from ElectrumX blockchain.transaction.broadcast RPC");
 	}
+
+    @Override
+    public void broadcastTransaction(byte[] bytes, String expectedTxId) throws ForeignBlockchainException {
+        Object result = this.rpc("blockchain.transaction.broadcast", HashCode.fromBytes(bytes).toString()).getResponse();
+        if (!(result instanceof String) || !expectedTxId.equalsIgnoreCase((String) result))
+            throw new ForeignBlockchainException.NetworkException("Broadcast transaction ID mismatch");
+    }
 
 	 // Class utility methods for status
 	public int getConnectedServerCount() {

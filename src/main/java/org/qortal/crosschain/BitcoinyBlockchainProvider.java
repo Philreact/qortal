@@ -1,6 +1,6 @@
 package org.qortal.crosschain;
 
-import cash.z.wallet.sdk.rpc.CompactFormats.CompactBlock;
+import pirate.wallet.sdk.rpc.CompactFormats.CompactBlock;
 
 import java.util.List;
 import java.util.Optional;
@@ -61,6 +61,11 @@ public abstract class BitcoinyBlockchainProvider {
 
 	/** Broadcasts raw, serialized, transaction bytes to network, returning success/failure. */
 	public abstract void broadcastTransaction(byte[] rawTransaction) throws ForeignBlockchainException;
+
+    /** Broadcast a locally signed transaction, binding the acknowledgement to its ID. */
+    public void broadcastTransaction(byte[] rawTransaction, String expectedTxId) throws ForeignBlockchainException {
+        throw new ForeignBlockchainException("Verified broadcast unsupported by provider");
+    }
 
 	public abstract Set<ChainableServer> getServers();
 
