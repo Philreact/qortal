@@ -1141,7 +1141,10 @@ public class Synchronizer extends Thread {
 		while (expectedTip.getHeight() < maximumSessionHeight) {
 			BlockFetchPlan plan = fetchAppendPlan(repository, peer, commonBlockData, expectedTip.getHeight(),
 					maximumSessionHeight, availableSummaries, allowFastBatch);
-			if (plan.result != SynchronizationResult.OK)
+			// A transport failure can leave a contiguous append prefix worth validating and
+			// committing. Other failures (including invalid data) must not apply a prefix.
+			if (plan.result != SynchronizationResult.OK
+					&& (plan.result != SynchronizationResult.NO_REPLY || plan.blocks.isEmpty()))
 				return plan.result;
 			if (plan.blocks.isEmpty())
 				return SynchronizationResult.NO_REPLY;
@@ -1183,6 +1186,12 @@ public class Synchronizer extends Thread {
 			commonBlockData = newTip;
 			availableSummaries = Collections.emptyList();
 			repository.discardChanges();
+			if (plan.result == SynchronizationResult.NO_REPLY) {
+				LOGGER.info("Applied {} blocks from peer {} through height {} before a request failed; retrying with peer selection",
+						plan.blocks.size(), peer, newTip.getHeight());
+				// Preserve the failed-request result so the caller can cool down this peer.
+				return SynchronizationResult.NO_REPLY;
+			}
 		}
 
 		LOGGER.info("Synchronized with peer {} to height {}, sig {}, ts: {}", peer, expectedTip.getHeight(),
@@ -1191,6 +1200,7 @@ public class Synchronizer extends Thread {
 	}
 
 	private static final class BlockFetchPlan {
+		// NO_REPLY may carry a valid append prefix. Reorg plans never carry partial blocks.
 		private final SynchronizationResult result;
 		private final List<Block> blocks;
 		private final boolean fastBatchUnavailable;
@@ -1203,10 +1213,6 @@ public class Synchronizer extends Thread {
 
 		private static BlockFetchPlan success(List<Block> blocks) {
 			return new BlockFetchPlan(SynchronizationResult.OK, blocks, false);
-		}
-
-		private static BlockFetchPlan successWithoutFastBatch(List<Block> blocks) {
-			return new BlockFetchPlan(SynchronizationResult.OK, blocks, true);
 		}
 
 		private static BlockFetchPlan failure(SynchronizationResult result) {
@@ -1282,9 +1288,7 @@ public class Synchronizer extends Thread {
 						peer, ourInitialHeight);
 				BlockFetchPlan fallback = fetchAppendPlanIndividually(repository, peer, commonBlockData,
 						peerBlockSummaries, requested);
-				if (fallback.result != SynchronizationResult.OK)
-					return fallback;
-				return BlockFetchPlan.successWithoutFastBatch(fallback.blocks);
+				return new BlockFetchPlan(fallback.result, fallback.blocks, true);
 			}
 			if (blocks.size() > requested)
 				return BlockFetchPlan.failure(SynchronizationResult.INVALID_DATA);
@@ -1312,21 +1316,28 @@ public class Synchronizer extends Thread {
 		List<byte[]> signatures = peerBlockSummaries.stream().map(BlockSummaryData::getSignature)
 				.collect(Collectors.toCollection(ArrayList::new));
 		List<Block> blocks = new ArrayList<>();
+		SynchronizationResult fetchResult = SynchronizationResult.OK;
 		while (blocks.size() < numberRequested) {
 			if (Controller.isStopping())
 				return BlockFetchPlan.failure(SynchronizationResult.SHUTTING_DOWN);
 			if (signatures.isEmpty()) {
 				signatures = this.getBlockSignatures(peer, latestSignature, numberRequested - blocks.size());
-				if (signatures == null || signatures.isEmpty())
-					return BlockFetchPlan.failure(SynchronizationResult.NO_REPLY);
+				if (signatures == null || signatures.isEmpty()) {
+					fetchResult = SynchronizationResult.NO_REPLY;
+					break;
+				}
 			}
 			if (this.containsInvalidBlockSignature(signatures))
 				return BlockFetchPlan.failure(SynchronizationResult.INVALID_DATA);
 			byte[] requestedSignature = signatures.remove(0);
 			Block block = this.fetchBlock(repository, peer, requestedSignature);
-			if (block == null)
-				return BlockFetchPlan.failure(SynchronizationResult.NO_REPLY);
-			if (!Arrays.equals(requestedSignature, block.getSignature()) || !block.isSignatureValid())
+			if (block == null) {
+				fetchResult = SynchronizationResult.NO_REPLY;
+				break;
+			}
+			if (!Objects.equals(block.getBlockData().getHeight(), commonBlockData.getHeight() + blocks.size() + 1)
+					|| !Arrays.equals(latestSignature, block.getBlockData().getReference())
+					|| !Arrays.equals(requestedSignature, block.getSignature()) || !block.isSignatureValid())
 				return BlockFetchPlan.failure(SynchronizationResult.INVALID_DATA);
 			for (Transaction transaction : block.getTransactions())
 				transaction.setInitialApprovalStatus();
@@ -1339,7 +1350,7 @@ public class Synchronizer extends Thread {
 			if (minimumTimestamp != null && (peerTimestamp == null || peerTimestamp < minimumTimestamp))
 				return BlockFetchPlan.failure(SynchronizationResult.CHAIN_TIP_TOO_OLD);
 		}
-		return BlockFetchPlan.success(blocks);
+		return new BlockFetchPlan(fetchResult, blocks, false);
 	}
 
 	private SynchronizationResult applyReorgPlan(Repository repository, BlockData commonBlockData,

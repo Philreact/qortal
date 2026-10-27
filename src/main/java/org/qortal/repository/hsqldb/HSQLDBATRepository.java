@@ -30,6 +30,7 @@ public class HSQLDBATRepository implements ATRepository {
 
 	private static final Logger LOGGER = LogManager.getLogger(HSQLDBATRepository.class);
 	private static final int PAYLOAD_CLEANUP_SWEEP_HEIGHTS = 10_000;
+	private static final int MAX_PAYLOAD_BUNDLES_PER_TRIM = 512;
 
 	protected HSQLDBRepository repository;
 	private final HSQLDBATStore store;
@@ -760,6 +761,7 @@ public class HSQLDBATRepository implements ATRepository {
 	@Override
 	public ATTrimResult trimAtStatesDetailed(int minHeight, int maxHeight, int limit) throws DataException {
 		if (minHeight <= 1) minHeight = 2;
+		limit = Math.min(limit, MAX_PAYLOAD_BUNDLES_PER_TRIM);
 		if (limit <= 0) return new ATTrimResult(0, minHeight > maxHeight);
 		try {
 			// Move each AT's rollback boundary forward before clearing a bundle. This is the
@@ -796,21 +798,7 @@ public class HSQLDBATRepository implements ATRepository {
 				}
 			}
 
-			Set<Integer> released = new HashSet<>();
 			List<String> addresses = new ArrayList<>(newest.keySet());
-			for (int start = 0; start < addresses.size(); start += 256) {
-				List<String> chunk = addresses.subList(start, Math.min(start + 256, addresses.size()));
-				try (ResultSet rows = repository.checkedExecute(
-						"SELECT AT_address,rollback_state_height FROM ATCurrentState WHERE AT_address IN ("
-								+ String.join(",", Collections.nCopies(chunk.size(), "?")) + ")", chunk.toArray())) {
-					if (rows != null) do {
-						Integer oldHeight = (Integer) rows.getObject(2);
-						BoundaryPointer replacement = newest.get(rows.getString(1));
-						if (oldHeight != null && replacement != null && replacement.height > oldHeight)
-							released.add(oldHeight);
-					} while (rows.next());
-				}
-			}
 			List<Object[]> updates = newest.entrySet().stream()
 					.map(entry -> new Object[]{entry.getValue().height, entry.getValue().hash, entry.getKey(), entry.getValue().height})
 					.collect(Collectors.toList());
@@ -818,56 +806,44 @@ public class HSQLDBATRepository implements ATRepository {
 					"UPDATE ATCurrentState SET rollback_state_height=?,rollback_payload_hash=? "
 							+ "WHERE AT_address=? AND (rollback_state_height IS NULL OR rollback_state_height<?)", updates);
 
-			Set<Integer> clearable = new HashSet<>(candidates.keySet());
-			clearable.addAll(released);
+			// A pointer can outlive its block bundle (finished and long-sleeping ATs are
+			// common). Detach exactly those entries before deleting every expired bundle.
+			// Both actions are part of this repository transaction, so a crash exposes
+			// either the complete bundle or the verified retained row, never neither.
+			Set<String> affectedAddresses = new HashSet<>(addresses);
+			affectedAddresses.addAll(store.retainReferencedPayloads(candidates));
+
 			int trimmed = 0;
-			List<Integer> heights = new ArrayList<>(clearable);
+			List<Integer> heights = new ArrayList<>(candidates.keySet());
 			for (int start = 0; start < heights.size(); start += 256) {
 				List<Integer> chunk = heights.subList(start, Math.min(start + 256, heights.size()));
 				trimmed += repository.executeCheckedUpdate(
 						"DELETE FROM ATBlockPayloads b WHERE b.block_height IN ("
-								+ String.join(",", Collections.nCopies(chunk.size(), "?")) + ") "
-								+ "AND NOT EXISTS(SELECT 1 FROM ATCurrentState c "
-								+ "WHERE c.latest_state_height=b.block_height OR c.previous_state_height=b.block_height "
-								+ "OR c.rollback_state_height=b.block_height)", chunk.toArray());
+								+ String.join(",", Collections.nCopies(chunk.size(), "?")) + ")", chunk.toArray());
 			}
+			store.deleteUnreferencedRetainedPayloads(affectedAddresses);
 			return new ATTrimResult(trimmed, rangeComplete);
 		} catch (SQLException | DataException e) { throw new DataException("Unable to trim AT block payload bundles", e); }
 	}
 
 	private int loadTrimCandidates(Map<Integer, byte[]> candidates, int minHeight, int maxHeight, int limit)
 			throws SQLException {
-		Set<Integer> protectedHeights = new HashSet<>();
-		try (ResultSet rows = repository.checkedExecute(
-				"SELECT latest_state_height,previous_state_height,rollback_state_height FROM ATCurrentState")) {
-			if (rows != null) do {
-				for (int column = 1; column <= 3; ++column) {
-					Integer height = (Integer) rows.getObject(column);
-					if (height != null) protectedHeights.add(height);
-				}
-			} while (rows.next());
-		}
-
 		int remaining = limit - candidates.size();
 		if (remaining <= 0)
 			return minHeight;
-		int queryLimit = remaining + protectedHeights.size();
 		int rowCount = 0;
 		int lastHeight = minHeight - 1;
 		try (ResultSet rows = repository.checkedExecute(
 				"SELECT b.block_height,b.payload_bytes FROM ATBlockPayloads b "
 						+ "WHERE b.block_height BETWEEN ? AND ? AND b.payload_bytes IS NOT NULL "
-						+ "ORDER BY b.block_height LIMIT ?", minHeight, maxHeight, queryLimit)) {
+						+ "ORDER BY b.block_height LIMIT ?", minHeight, maxHeight, remaining)) {
 			if (rows != null) do {
 				lastHeight = rows.getInt(1);
 				++rowCount;
-				if (!protectedHeights.contains(lastHeight)) {
-					candidates.put(lastHeight, rows.getBytes(2));
-					if (candidates.size() >= limit) break;
-				}
+				candidates.put(lastHeight, rows.getBytes(2));
 			} while (rows.next());
 		}
-		return rowCount < queryLimit && candidates.size() < limit ? maxHeight + 1 : lastHeight + 1;
+		return rowCount < remaining ? maxHeight + 1 : lastHeight + 1;
 	}
 
 	private int getPayloadCleanupHeight() throws SQLException {
@@ -924,15 +900,22 @@ public class HSQLDBATRepository implements ATRepository {
         if (minHeight > maxHeight)
             return 0;
         try {
+			Set<String> affectedAddresses;
+			Map<Integer, byte[]> payloads = new LinkedHashMap<>();
+			try (ResultSet rows = repository.checkedExecute(
+					"SELECT block_height,payload_bytes FROM ATBlockPayloads "
+							+ "WHERE block_height BETWEEN ? AND ? AND payload_bytes IS NOT NULL ORDER BY block_height",
+					minHeight, maxHeight)) {
+				if (rows != null) do {
+					payloads.put(rows.getInt(1), rows.getBytes(2));
+				} while (rows.next());
+			}
+			affectedAddresses = store.retainReferencedPayloads(payloads);
 			int deletedResults = repository.executeCheckedUpdate(
-					"DELETE FROM ATBlockResults b WHERE block_height BETWEEN ? AND ? "
-							+ "AND NOT EXISTS(SELECT 1 FROM ATCurrentState c WHERE c.latest_state_height=b.block_height "
-							+ "OR c.previous_state_height=b.block_height OR c.rollback_state_height=b.block_height)",
+					"DELETE FROM ATBlockResults WHERE block_height BETWEEN ? AND ?",
 					minHeight, maxHeight);
 			int deletedPayloads = repository.executeCheckedUpdate(
-					"DELETE FROM ATBlockPayloads b WHERE block_height BETWEEN ? AND ? "
-							+ "AND NOT EXISTS(SELECT 1 FROM ATCurrentState c WHERE c.latest_state_height=b.block_height "
-							+ "OR c.previous_state_height=b.block_height OR c.rollback_state_height=b.block_height)",
+					"DELETE FROM ATBlockPayloads WHERE block_height BETWEEN ? AND ?",
 					minHeight, maxHeight);
 			// Pre-migration blocks use this compact metadata to locate their parent. Keep
 			// metadata for all live pointers even when the corresponding height is old.
@@ -940,6 +923,7 @@ public class HSQLDBATRepository implements ATRepository {
 					+ "AND NOT EXISTS(SELECT 1 FROM ATCurrentState c WHERE c.AT_address=s.AT_address AND "
 					+ "(c.latest_state_height=s.height OR c.previous_state_height=s.height "
 					+ "OR c.rollback_state_height=s.height))", minHeight, maxHeight);
+			store.deleteUnreferencedRetainedPayloads(affectedAddresses);
             return Math.max(deletedResults, deletedPayloads);
         } catch (SQLException e) {
             throw new DataException("Unable to prune AT block results", e);
@@ -1082,11 +1066,15 @@ public class HSQLDBATRepository implements ATRepository {
 	public void checkConsistency() throws DataException {
 		String sql = "SELECT COUNT(*) FROM ("
 				+ "SELECT c.AT_address FROM ATCurrentState c LEFT OUTER JOIN ATBlockPayloads b ON b.block_height=c.latest_state_height "
-				+ "WHERE c.payload_hash IS NOT NULL AND b.block_height IS NULL "
+				+ "LEFT OUTER JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address AND r.state_height=c.latest_state_height "
+				+ "AND r.payload_hash=c.payload_hash WHERE c.payload_hash IS NOT NULL AND b.block_height IS NULL AND r.AT_address IS NULL "
 				+ "UNION ALL SELECT c.AT_address FROM ATCurrentState c LEFT OUTER JOIN ATBlockPayloads b ON b.block_height=c.previous_state_height "
-				+ "WHERE c.previous_payload_hash IS NOT NULL AND b.block_height IS NULL "
+				+ "LEFT OUTER JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address AND r.state_height=c.previous_state_height "
+				+ "AND r.payload_hash=c.previous_payload_hash WHERE c.previous_payload_hash IS NOT NULL AND b.block_height IS NULL AND r.AT_address IS NULL "
 				+ "UNION ALL SELECT c.AT_address FROM ATCurrentState c LEFT OUTER JOIN ATBlockPayloads b ON b.block_height=c.rollback_state_height "
-				+ "WHERE c.rollback_payload_hash IS NOT NULL AND b.block_height IS NULL) missing";
+				+ "LEFT OUTER JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address AND r.state_height=c.rollback_state_height "
+				+ "AND r.payload_hash=c.rollback_payload_hash WHERE c.rollback_payload_hash IS NOT NULL "
+				+ "AND b.block_height IS NULL AND r.AT_address IS NULL) missing";
 
 		try (ResultSet resultSet = this.repository.checkedExecute(sql)) {
 			if (resultSet == null)

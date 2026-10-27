@@ -18,6 +18,7 @@ public final class HSQLDBATStoreMigration {
 	private static final Logger LOGGER = LogManager.getLogger(HSQLDBATStoreMigration.class);
 	private static final int CHUNK = 2048;
 	private static final int PAYLOAD_BUNDLE_CHUNK = 16_384;
+	private static final int ACTIVE_FORMAT_VERSION = 5;
 
     private HSQLDBATStoreMigration() { }
 
@@ -39,9 +40,9 @@ public final class HSQLDBATStoreMigration {
         connection.commit();
 		int phase = phase(connection);
 		int formatVersion = formatVersion(connection);
-		if (formatVersion != 0 && formatVersion != 4)
+		if (formatVersion != 0 && formatVersion != 4 && formatVersion != ACTIVE_FORMAT_VERSION)
 			throw new SQLException("Unsupported AT store format " + formatVersion);
-		if (formatVersion == 4 && phase != 6)
+		if (formatVersion != 0 && phase != 6)
 			throw new SQLException("Completed AT store format has incomplete migration phase " + phase);
 		if (phase >= 6) { finalizeStore(connection); return; }
 
@@ -249,9 +250,26 @@ public final class HSQLDBATStoreMigration {
 				requireZero(connection, "SELECT COUNT(*) FROM LegacyATStatesData d LEFT JOIN ATBlockPayloads b "
 						+ "ON b.block_height=d.height AND b.payload_bytes IS NOT NULL WHERE b.block_height IS NULL",
 						"legacy payload without final block bundle");
-			execute(connection, "UPDATE ATStoreInfo SET format_version=4 WHERE id=1");
+			ensureRetainedPayloadTable(connection);
+			execute(connection, "UPDATE ATStoreInfo SET format_version=" + ACTIVE_FORMAT_VERSION + " WHERE id=1");
 			connection.commit();
-		} else if (format != 4) {
+		} else if (format == 4) {
+			// Interim, unreleased stores used block bundles for long-lived pointers. Add a
+			// bounded spill table and restart the historical sweep so bundles skipped as
+			// "protected" by that format are revisited and detached.
+			// Some of those builds used checkpoint-only runtime persistence, so enable the
+			// recovery log before publishing the new active-format marker.
+			execute(connection, "SET FILES LOG TRUE");
+			execute(connection, "SET FILES WRITE DELAY 0");
+			connection.commit();
+			ensureRetainedPayloadTable(connection);
+			execute(connection, "UPDATE ATStoreInfo SET format_version=" + ACTIVE_FORMAT_VERSION
+					+ ",cleanup_height=2 WHERE id=1");
+			connection.commit();
+		} else if (format == ACTIVE_FORMAT_VERSION) {
+			if (!tableExists(connection, "ATRETAINEDSTATEPAYLOADS"))
+				throw new SQLException("Active AT retained-payload table is missing");
+		} else {
 			throw new SQLException("Unsupported AT store format " + format);
 		}
 
@@ -259,6 +277,16 @@ public final class HSQLDBATStoreMigration {
 		execute(connection, "DROP TABLE IF EXISTS LegacyATStatesData");
 		connection.commit();
 		LOGGER.info("AT direct payload migration complete; block bundles are authoritative");
+	}
+
+	private static void ensureRetainedPayloadTable(Connection connection) throws SQLException {
+		if (!tableExists(connection, "ATRETAINEDSTATEPAYLOADS")) {
+			execute(connection, "CREATE TABLE ATRetainedStatePayloads ("
+					+ "AT_address QortalAddress NOT NULL, state_height INTEGER NOT NULL, "
+					+ "payload_hash ATStateHash NOT NULL, payload_bytes VARBINARY(16M) NOT NULL, "
+					+ "PRIMARY KEY (AT_address,state_height), "
+					+ "FOREIGN KEY (AT_address) REFERENCES ATDefinitions(AT_address) ON DELETE CASCADE)");
+		}
 	}
 
 	private static void ensureSplitTables(Connection connection) throws SQLException {
@@ -283,9 +311,13 @@ public final class HSQLDBATStoreMigration {
 	}
 
 	public static void validateActiveStore(Connection c) throws SQLException {
+		// This also upgrades databases produced by short-lived development builds whose
+		// schema counter is newer than the consolidated release migration.
+		if (formatVersion(c) == 4)
+			finalizeStore(c);
         try (Statement s = c.createStatement(); ResultSet r = s.executeQuery("SELECT phase,format_version,tip_signature,"
                 + "(SELECT signature FROM Blocks ORDER BY height DESC LIMIT 1) FROM ATStoreInfo WHERE id=1")) {
-			if (!r.next() || r.getInt(1) != 6 || r.getInt(2) != 4
+			if (!r.next() || r.getInt(1) != 6 || r.getInt(2) != ACTIVE_FORMAT_VERSION
 					|| !Arrays.equals(r.getBytes(3), r.getBytes(4)))
                 throw new SQLException("AT store is incomplete, incompatible, or belongs to a different chain tip");
         }
@@ -293,17 +325,28 @@ public final class HSQLDBATStoreMigration {
 			throw new SQLException("AT store migration left legacy payload storage active");
 		if (!tableExists(c, "ATBLOCKPAYLOADS") || !columnExists(c, "ATBLOCKPAYLOADS", "PAYLOAD_BYTES")
 				|| !tableExists(c, "ATBLOCKRESULTS") || !columnExists(c, "ATBLOCKRESULTS", "RESULT_BYTES")
-				|| columnExists(c, "ATBLOCKRESULTS", "PAYLOAD_BYTES"))
+				|| columnExists(c, "ATBLOCKRESULTS", "PAYLOAD_BYTES")
+				|| !tableExists(c, "ATRETAINEDSTATEPAYLOADS"))
 			throw new SQLException("AT result/payload split store is incomplete");
 		requireZero(c,"SELECT COUNT(*) FROM ATDefinitions d LEFT JOIN ATCurrentState c USING(AT_address) "
 				+ "LEFT JOIN ATBlockPayloads b ON b.block_height=c.latest_state_height AND b.payload_bytes IS NOT NULL "
-				+ "WHERE c.AT_address IS NULL OR (c.payload_hash IS NOT NULL AND b.block_height IS NULL) "
+				+ "LEFT JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address "
+				+ "AND r.state_height=c.latest_state_height AND r.payload_hash=c.payload_hash "
+				+ "WHERE c.AT_address IS NULL OR (c.payload_hash IS NOT NULL AND b.block_height IS NULL AND r.AT_address IS NULL) "
 				+ "OR c.schedule_class<>CASE WHEN c.is_finished THEN 2 WHEN c.sleep_until_message_timestamp IS NULL THEN 0 ELSE 1 END",
 				"current state/bundle/schedule inconsistency");
 		requireZero(c,"SELECT COUNT(*) FROM ATCurrentState c LEFT JOIN ATBlockPayloads b "
 				+ "ON b.block_height=c.rollback_state_height AND b.payload_bytes IS NOT NULL "
-				+ "WHERE c.rollback_payload_hash IS NOT NULL AND b.block_height IS NULL",
+				+ "LEFT JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address "
+				+ "AND r.state_height=c.rollback_state_height AND r.payload_hash=c.rollback_payload_hash "
+				+ "WHERE c.rollback_payload_hash IS NOT NULL AND b.block_height IS NULL AND r.AT_address IS NULL",
 				"rollback boundary/bundle inconsistency");
+		requireZero(c,"SELECT COUNT(*) FROM ATCurrentState c LEFT JOIN ATBlockPayloads b "
+				+ "ON b.block_height=c.previous_state_height AND b.payload_bytes IS NOT NULL "
+				+ "LEFT JOIN ATRetainedStatePayloads r ON r.AT_address=c.AT_address "
+				+ "AND r.state_height=c.previous_state_height AND r.payload_hash=c.previous_payload_hash "
+				+ "WHERE c.previous_payload_hash IS NOT NULL AND b.block_height IS NULL AND r.AT_address IS NULL",
+				"previous state/bundle inconsistency");
         // Legacy ATStates table is no longer maintained — only validate that remaining rows
         // don't have a height beyond their ATCurrentState entry (may be absent for post-migration ATs)
         requireZero(c,"SELECT COUNT(*) FROM ATDefinitions d "

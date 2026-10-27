@@ -748,7 +748,10 @@ public class Block {
 		// We exclude initial AT states created by processing DEPLOY_AT transactions as they are never serialized and so not included in block's AT count.
 		int nonInitialCount = (int) atStateData.stream().filter(atState -> !atState.isInitial()).count();
 		if (nonInitialCount != this.blockData.getATCount())
-			throw new IllegalStateException("Block's AT states from repository do not match block's AT count");
+			// Pruned blocks imported from a V2 archive can lack individual AT summaries.
+			// Report unavailable or inconsistent repository data through the checked error path.
+			throw new DataException(String.format("AT state summary count mismatch at block %d: expected %d, found %d",
+					this.blockData.getHeight(), this.blockData.getATCount(), nonInitialCount));
 
 		this.atStates = atStateData;
 

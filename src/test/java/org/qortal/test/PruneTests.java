@@ -144,9 +144,9 @@ public class PruneTests extends Common {
             // Prune AT states up to block 20
             repository.saveChanges();
             int numATStatesPruned = repository.getATRepository().pruneAtStates(0, 20);
-			// The deployment metadata is pruned. The old block bundle stays because it
-			// contains the sleeping AT's immediate parent payload needed for orphaning.
-            assertEquals(1, numATStatesPruned);
+			// Both old block rows are removed after the sleeping AT's exact parent
+			// payload is copied into the bounded retained-state store.
+			assertEquals(2, numATStatesPruned);
 
             // Check AT is finished
             ATData atData = repository.getATRepository().fromATAddress(atAddress);

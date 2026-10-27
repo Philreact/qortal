@@ -660,30 +660,33 @@ public class BlockArchiveV2Tests extends Common {
 			assertEquals(block3DataPreArchive.getHeight(), block3DataPostArchive.getHeight());
 			System.out.println("Block 3 data matches the original.");
 
-				// Archive V2 carries AT receipt hashes and fees, but not VM payload bytes.
-				// The immediately retained parent is therefore the last safe AT orphan boundary.
-				System.out.println("Orphaning 1 more block...");
-				BlockUtils.orphanBlocks(repository, 1);
-				System.out.println("Orphaned 1 block successfully.");
+			// These unpruned blocks still have individual AT receipts in the repository.
+			// The retained-state row supplies the exact VM payload at the trim boundary.
+			System.out.println("Orphaning 1 more block...");
+			BlockUtils.orphanBlocks(repository, 1);
+			System.out.println("Orphaned 1 block successfully.");
+			System.out.println("Orphaning the retained AT boundary block...");
+			BlockUtils.orphanBlocks(repository, 1);
+			System.out.println("Retained AT boundary block orphaned successfully.");
 
-			// Orphan another block, which should fail
-			System.out.println("Attempting to orphan another block, which should fail...");
-			Exception exception = null;
+			// V2 imports only the combined AT hash, so the next block's pruned individual
+			// state summaries are unavailable even before we try to load its parent payload.
+			System.out.println("Attempting to orphan beyond retained AT data...");
+			int retainedBoundaryHeight = repository.getBlockRepository().getBlockchainHeight();
+			int expectedATCount = repository.getBlockRepository().getLastBlock().getATCount();
+			assertTrue(expectedATCount > 0);
+			assertTrue(repository.getATRepository().getBlockATStatesAtHeight(retainedBoundaryHeight).isEmpty());
 			try {
 				BlockUtils.orphanBlocks(repository, 1);
+				fail("Orphaning without individual AT state summaries must fail");
 			} catch (DataException e) {
-				exception = e;
-				System.out.println("Caught expected DataException: " + e.getMessage());
+				assertEquals(String.format("AT state summary count mismatch at block %d: expected %d, found 0",
+						retainedBoundaryHeight, expectedATCount), e.getMessage());
+			} finally {
+				repository.discardChanges();
 			}
 
-			// Ensure that a DataException is thrown because there is no more AT states data available
-			assertNotNull(exception);
-			assertEquals(DataException.class, exception.getClass());
-			repository.discardChanges();
-			System.out.println("DataException confirmed due to lack of AT states data.");
-
-			// FUTURE: we may be able to retain unique AT states when trimming, to avoid this exception
-			// and allow orphaning back through blocks with trimmed AT states.
+			assertEquals(retainedBoundaryHeight, repository.getBlockRepository().getBlockchainHeight());
 
 			System.out.println("testTrimArchivePruneAndOrphan completed successfully.");
 		}

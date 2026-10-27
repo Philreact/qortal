@@ -78,11 +78,12 @@ public class ATStoreMigrationTests {
 
     private void assertMigrated(Connection c, int states) throws Exception {
         assertEquals(6,count(c,"SELECT phase FROM ATStoreInfo"));
-		assertEquals(4,count(c,"SELECT format_version FROM ATStoreInfo"));
+		assertEquals(5,count(c,"SELECT format_version FROM ATStoreInfo"));
 		assertEquals(1,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='ATBLOCKPAYLOADS' AND COLUMN_NAME='PAYLOAD_BYTES'"));
 		assertEquals(1,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='ATBLOCKRESULTS' AND COLUMN_NAME='RESULT_BYTES'"));
 		assertEquals(0,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='ATBLOCKRESULTS' AND COLUMN_NAME='PAYLOAD_BYTES'"));
 		assertEquals(0,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATSTATEPAYLOADS'"));
+		assertEquals(1,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATRETAINEDSTATEPAYLOADS'"));
 		assertEquals(0,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='LEGACYATSTATESDATA'"));
 		assertEquals(0,count(c,"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATSTATESDATA'"));
 		assertEquals(states,count(c,"SELECT COUNT(*) FROM ATBlockPayloads WHERE payload_bytes IS NOT NULL"));
@@ -197,14 +198,15 @@ public class ATStoreMigrationTests {
 			Security.addProvider(new BouncyCastleProvider());
 			Settings.fileInstance("src/test/resources/test-settings-v2.json");
 			HSQLDBRepository repository = new HSQLDBRepository(c);
-			assertEquals(0, new HSQLDBATRepository(repository).trimAtStates(2, 10, 100));
+			assertEquals(1, new HSQLDBATRepository(repository).trimAtStates(2, 10, 100));
 			new HSQLDBATRepository(repository).pruneAtStates(2, 10);
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=5 AND payload_bytes IS NOT NULL"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=5"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE AT_address='at' AND state_height=5"));
 			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATStates WHERE AT_address='at' AND height=5"));
 
 			new HSQLDBATStore(repository).deleteBlockResult(20);
 			assertEquals(5, count(c, "SELECT latest_state_height FROM ATCurrentState WHERE AT_address='at'"));
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=5 AND payload_bytes IS NOT NULL"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE AT_address='at' AND state_height=5"));
 			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=20"));
 			c.rollback();
 		}
@@ -219,14 +221,17 @@ public class ATStoreMigrationTests {
 			HSQLDBRepository repository = new HSQLDBRepository(c);
 			HSQLDBATRepository ats = new HSQLDBATRepository(repository);
 
-			assertEquals(8, ats.trimAtStates(2, 10, 100));
+			assertEquals(9, ats.trimAtStates(2, 10, 100));
 			assertEquals(10, count(c, "SELECT rollback_state_height FROM ATCurrentState WHERE AT_address='at'"));
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10 AND payload_bytes IS NOT NULL"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE AT_address='at' AND state_height=10"));
 
 			assertEquals(5, ats.trimAtStates(11, 15, 100));
 			assertEquals(15, count(c, "SELECT rollback_state_height FROM ATCurrentState WHERE AT_address='at'"));
 			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10 AND payload_bytes IS NOT NULL"));
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=15 AND payload_bytes IS NOT NULL"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=15"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE AT_address='at' AND state_height=10"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE AT_address='at' AND state_height=15"));
 			c.rollback();
 		}
 	}
@@ -275,17 +280,25 @@ public class ATStoreMigrationTests {
 			Settings.fileInstance("src/test/resources/test-settings-v2.json");
 			HSQLDBATRepository ats = new HSQLDBATRepository(new HSQLDBRepository(c));
 
-			ats.trimAtStates(2, 15, 100);
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10 AND payload_bytes IS NOT NULL"));
-			try (Statement s = c.createStatement()) {
-				s.executeUpdate("UPDATE ATCurrentState SET previous_state_height=NULL,previous_payload_hash=NULL WHERE AT_address='at2'");
-			}
-			ats.trimAtStates(16, 18, 100);
-			ats.trimAtStates(16, 18, 100);
-
+			ats.trimAtStates(2, 10, 100);
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10"));
+			assertEquals(2, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE state_height=10"));
+			ats.trimAtStates(11, 15, 100);
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE state_height=10"));
 			assertEquals(10, count(c, "SELECT rollback_state_height FROM ATCurrentState WHERE AT_address='at2'"));
-			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10 AND payload_bytes IS NOT NULL"));
+			assertNotNull(ats.getStatePayload("at2", 10,
+					payloadHash(c, "at2", "rollback_payload_hash")));
 			c.rollback();
+		}
+	}
+
+	private static byte[] payloadHash(Connection c, String address, String column) throws SQLException {
+		try (PreparedStatement statement = c.prepareStatement("SELECT " + column + " FROM ATCurrentState WHERE AT_address=?")) {
+			statement.setString(1, address);
+			try (ResultSet rows = statement.executeQuery()) {
+				assertTrue(rows.next());
+				return rows.getBytes(1);
+			}
 		}
 	}
 
@@ -302,6 +315,63 @@ public class ATStoreMigrationTests {
 			ats.trimAtStates(30_000, 29_999, 100);
 			assertEquals(20_002, count(c, "SELECT cleanup_height FROM ATStoreInfo"));
 			c.rollback();
+		}
+	}
+
+	@Test
+	public void bundleDeletionAndRetainedPayloadRollBackTogether() throws Exception {
+		try (Connection c = legacy(20)) {
+			HSQLDBATStoreMigration.migrate(c);
+			Security.addProvider(new BouncyCastleProvider());
+			Settings.fileInstance("src/test/resources/test-settings-v2.json");
+			HSQLDBATRepository ats = new HSQLDBATRepository(new HSQLDBRepository(c));
+
+			ats.trimAtStates(2, 10, 100);
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads WHERE state_height=10"));
+
+			c.rollback();
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads"));
+		}
+	}
+
+	@Test
+	public void mismatchedPointerCannotDeleteItsBundle() throws Exception {
+		try (Connection c = legacy(20)) {
+			HSQLDBATStoreMigration.migrate(c);
+			Security.addProvider(new BouncyCastleProvider());
+			Settings.fileInstance("src/test/resources/test-settings-v2.json");
+			try (Statement statement = c.createStatement()) {
+				statement.executeUpdate("UPDATE ATCurrentState SET latest_state_height=10,payload_hash=X'00'");
+			}
+			try {
+				new HSQLDBATRepository(new HSQLDBRepository(c)).trimAtStates(2, 10, 100);
+				fail("corrupt pointer must stop cleanup");
+			} catch (org.qortal.repository.DataException expected) {
+				c.rollback();
+			}
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM ATBlockPayloads WHERE block_height=10"));
+			assertEquals(0, count(c, "SELECT COUNT(*) FROM ATRetainedStatePayloads"));
+		}
+	}
+
+	@Test
+	public void interimFormatUpgradesWithoutPayloadRewrite() throws Exception {
+		try (Connection c = legacy(20)) {
+			HSQLDBATStoreMigration.migrate(c);
+			try (Statement statement = c.createStatement()) {
+				statement.execute("DROP TABLE ATRetainedStatePayloads");
+				statement.executeUpdate("UPDATE ATStoreInfo SET format_version=4,cleanup_height=999");
+			}
+			c.commit();
+
+			HSQLDBATStoreMigration.validateActiveStore(c);
+			assertEquals(5, count(c, "SELECT format_version FROM ATStoreInfo"));
+			assertEquals(2, count(c, "SELECT cleanup_height FROM ATStoreInfo"));
+			assertEquals(1, count(c, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+					+ "WHERE TABLE_NAME='ATRETAINEDSTATEPAYLOADS'"));
+			assertEquals(20, count(c, "SELECT COUNT(*) FROM ATBlockPayloads"));
 		}
 	}
 
@@ -389,8 +459,9 @@ public class ATStoreMigrationTests {
                 try (Statement s = c.createStatement()) { s.execute("SHUTDOWN"); }
             }
             try (Connection c = DriverManager.getConnection(url+";ifexists=true")) {
-				assertEquals(4, count(c, "SELECT format_version FROM ATStoreInfo"));
-                assertEquals(0, count(c, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATSTATEPAYLOADS'"));
+				assertEquals(5, count(c, "SELECT format_version FROM ATStoreInfo"));
+				assertEquals(0, count(c, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATSTATEPAYLOADS'"));
+				assertEquals(1, count(c, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='ATRETAINEDSTATEPAYLOADS'"));
                 HSQLDBATStoreMigration.validateActiveStore(c);
                 try (Statement s = c.createStatement()) { s.execute("SHUTDOWN"); }
             }

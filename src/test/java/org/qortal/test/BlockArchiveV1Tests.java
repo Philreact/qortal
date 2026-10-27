@@ -613,24 +613,27 @@ public class BlockArchiveV1Tests extends Common {
 			BlockUtils.orphanBlocks(repository, 1);
 			System.out.println("Orphaned 1 block successfully.");
 
-			// Orphan another block, which should fail
-			System.out.println("Attempting to orphan another block, which should fail...");
-			Exception exception = null;
+			// The compact retained-state row permits one more exact rollback without
+			// keeping the old multi-AT block bundle.
+			System.out.println("Orphaning the retained AT boundary block...");
+			BlockUtils.orphanBlocks(repository, 1);
+			System.out.println("Retained AT boundary block orphaned successfully.");
+
+			// V1 restores individual state summaries, but the parent VM payload is gone.
+			System.out.println("Attempting to orphan beyond retained AT data...");
+			int retainedBoundaryHeight = repository.getBlockRepository().getBlockchainHeight();
 			try {
 				BlockUtils.orphanBlocks(repository, 1);
+				fail("Orphaning beyond retained AT payloads must fail");
 			} catch (DataException e) {
-				exception = e;
-				System.out.println("Caught expected DataException: " + e.getMessage());
+				assertEquals("Unable to delete AT block result", e.getMessage());
+				assertNotNull(e.getCause());
+				assertTrue(e.getCause().getMessage().contains("parent payload is missing"));
+			} finally {
+				repository.discardChanges();
 			}
 
-			// Ensure that a DataException is thrown because there is no more AT states data available
-				assertNotNull(exception);
-				assertEquals(DataException.class, exception.getClass());
-				repository.discardChanges();
-				System.out.println("DataException confirmed due to lack of AT states data.");
-
-			// FUTURE: we may be able to retain unique AT states when trimming, to avoid this exception
-			// and allow orphaning back through blocks with trimmed AT states.
+			assertEquals(retainedBoundaryHeight, repository.getBlockRepository().getBlockchainHeight());
 
 			System.out.println("testTrimArchivePruneAndOrphan completed successfully.");
 		}

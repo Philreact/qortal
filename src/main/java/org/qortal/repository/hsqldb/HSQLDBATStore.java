@@ -70,7 +70,7 @@ final class HSQLDBATStore {
 				throw new SQLException("Invalid AT state bundle at height " + height, e);
 			}
 		}
-		return null;
+		return readRetainedPayload(address, height, hash);
 	}
 
     void preloadStates(List<ATStateData> metadata) throws SQLException {
@@ -97,8 +97,101 @@ final class HSQLDBATStore {
 				} while (rs.next());
 			}
 		}
+		if (!missing.isEmpty()) {
+			List<String> addresses = metadata.stream().map(ATStateData::getATAddress).distinct()
+					.collect(java.util.stream.Collectors.toList());
+			for (int start = 0; start < addresses.size(); start += 256) {
+				List<String> chunk = addresses.subList(start, Math.min(start + 256, addresses.size()));
+				try (ResultSet rs = repository.checkedExecute(
+						"SELECT AT_address,state_height,payload_hash,payload_bytes FROM ATRetainedStatePayloads "
+								+ "WHERE AT_address IN (" + String.join(",", Collections.nCopies(chunk.size(), "?")) + ")",
+						chunk.toArray())) {
+					if (rs != null) do {
+						byte[] hash = rs.getBytes(3), data = rs.getBytes(4);
+						verify(hash, data);
+						STATE_CACHE.put(hash, data);
+						missing.remove(org.qortal.utils.ByteArray.wrap(hash));
+					} while (rs.next());
+				}
+			}
+		}
         if (!missing.isEmpty()) throw new SQLException("Missing retained AT state payloads");
     }
+
+	private byte[] readRetainedPayload(String address, int height, byte[] hash) throws SQLException {
+		try (ResultSet rs = repository.checkedExecute(
+				"SELECT payload_hash,payload_bytes FROM ATRetainedStatePayloads WHERE AT_address=? AND state_height=?",
+				address, height)) {
+			if (rs == null) return null;
+			byte[] storedHash = rs.getBytes(1), data = rs.getBytes(2);
+			if (!Arrays.equals(hash, storedHash))
+				throw new SQLException("Retained AT payload hash does not match current head");
+			verify(storedHash, data);
+			STATE_CACHE.put(storedHash, data);
+			return data.clone();
+		}
+	}
+
+	/**
+	 * Copy only entries still named by current-state pointers out of an expiring block
+	 * bundle. The caller deletes the bundle in the same repository transaction.
+	 */
+	Set<String> retainReferencedPayloads(Map<Integer, byte[]> bundles) throws SQLException, DataException {
+		if (bundles.isEmpty()) return Collections.emptySet();
+		Map<Integer, Map<String, ATStateBundle.Entry>> decoded = new HashMap<>();
+		Map<String, Object[]> retained = new LinkedHashMap<>();
+		Set<String> retainedAddresses = new HashSet<>();
+		try (ResultSet rows = repository.checkedExecute(
+				"SELECT AT_address,latest_state_height,payload_hash,previous_state_height,previous_payload_hash,"
+						+ "rollback_state_height,rollback_payload_hash FROM ATCurrentState")) {
+			if (rows != null) do {
+				String address = rows.getString(1);
+				for (int pair = 0; pair < 3; ++pair) {
+					Integer pointerHeight = (Integer) rows.getObject(2 + pair * 2);
+					byte[] pointerHash = rows.getBytes(3 + pair * 2);
+					if (pointerHeight != null && pointerHash != null && bundles.containsKey(pointerHeight)) {
+						Map<String, ATStateBundle.Entry> bundle = decoded.get(pointerHeight);
+						if (bundle == null) {
+							bundle = ATStateBundle.deserialize(bundles.get(pointerHeight));
+							decoded.put(pointerHeight, bundle);
+						}
+						ATStateBundle.Entry entry = bundle.get(address);
+						if (entry == null || !Arrays.equals(pointerHash, entry.hash))
+							throw new SQLException("Referenced AT payload is missing from block bundle at height " + pointerHeight);
+						verify(entry.hash, entry.data);
+						String key = address + '\0' + pointerHeight;
+						Object[] prior = retained.putIfAbsent(key,
+								new Object[]{address, pointerHeight, entry.hash, entry.data});
+						if (prior != null && (!Arrays.equals((byte[]) prior[2], entry.hash)
+								|| !Arrays.equals((byte[]) prior[3], entry.data)))
+							throw new SQLException("Conflicting AT pointers at retained height " + pointerHeight);
+						retainedAddresses.add(address);
+					}
+				}
+			} while (rows.next());
+		}
+		if (!retained.isEmpty())
+			repository.executeCheckedBatchUpdate(
+					"INSERT INTO ATRetainedStatePayloads (AT_address,state_height,payload_hash,payload_bytes) VALUES(?,?,?,?)",
+					new ArrayList<>(retained.values()));
+		return retainedAddresses;
+	}
+
+	void deleteUnreferencedRetainedPayloads(Collection<String> addresses) throws SQLException {
+		if (addresses.isEmpty()) return;
+		List<String> unique = new ArrayList<>(new LinkedHashSet<>(addresses));
+		for (int start = 0; start < unique.size(); start += 256) {
+			List<String> chunk = unique.subList(start, Math.min(start + 256, unique.size()));
+			repository.executeCheckedUpdate(
+					"DELETE FROM ATRetainedStatePayloads d WHERE d.AT_address IN ("
+							+ String.join(",", Collections.nCopies(chunk.size(), "?")) + ") AND NOT EXISTS ("
+							+ "SELECT 1 FROM ATCurrentState c WHERE c.AT_address=d.AT_address AND ("
+							+ "(c.latest_state_height=d.state_height AND c.payload_hash=d.payload_hash) OR "
+							+ "(c.previous_state_height=d.state_height AND c.previous_payload_hash=d.payload_hash) OR "
+							+ "(c.rollback_state_height=d.state_height AND c.rollback_payload_hash=d.payload_hash)))",
+					chunk.toArray());
+		}
+	}
 
     void saveDefinition(ATData data) throws SQLException, DataException {
         if (!repository.exists("ATDefinitions", "AT_address = ?", data.getATAddress())) {
@@ -308,7 +401,7 @@ final class HSQLDBATStore {
 				throw new SQLException("Invalid AT state bundle at height " + height, e);
 			}
 		}
-		return false;
+		return readRetainedPayload(address, height, hash) != null;
 	}
 
     /**
@@ -338,9 +431,8 @@ final class HSQLDBATStore {
 		Map<Integer, Map<String, org.qortal.at.ATBlockResult.Entry>> resultsByHeight = new HashMap<>();
 		for (Integer parentHeight : parentHeights) {
 			byte[] payloadBlob = readPayloadBundle(parentHeight);
-			if (payloadBlob == null)
-				throw new SQLException("Cannot orphan AT block: retained parent payload bundle is missing at height " + parentHeight);
-			payloadsByHeight.put(parentHeight, ATStateBundle.deserialize(payloadBlob));
+			payloadsByHeight.put(parentHeight, payloadBlob == null
+					? Collections.emptyMap() : ATStateBundle.deserialize(payloadBlob));
 
 			Map<String, org.qortal.at.ATBlockResult.Entry> parentResults = new HashMap<>();
 			byte[] parentResultBlob = readBlockResult(parentHeight);
@@ -362,8 +454,11 @@ final class HSQLDBATStore {
 		Map<String, StatePointer> parentPointers = new HashMap<>();
 		for (org.qortal.at.ATBlockResult.Entry entry : entries)
 			if (!entry.isInitial && entry.prevStateHash != null) {
-				ATStateBundle.Entry payload = payloadsByHeight.get(entry.prevHeight).get(entry.address);
-				if (payload == null || !Arrays.equals(entry.prevStateHash, payload.hash))
+				ATStateBundle.Entry payload = payloadsByHeight.getOrDefault(entry.prevHeight, Collections.emptyMap())
+						.get(entry.address);
+				byte[] parentPayload = payload == null
+						? readRetainedPayload(entry.address, entry.prevHeight, entry.prevStateHash) : payload.data;
+				if (parentPayload == null || (payload != null && !Arrays.equals(entry.prevStateHash, payload.hash)))
 					throw new SQLException("Cannot orphan AT block: retained parent payload is missing for " + entry.address);
 
 				org.qortal.at.ATBlockResult.Entry parent = resultsByHeight.get(entry.prevHeight).get(entry.address);
@@ -375,7 +470,10 @@ final class HSQLDBATStore {
 				} else {
 					ATStateBundle.Entry grandparent = payloadsByHeight
 							.getOrDefault(parent.prevHeight, Collections.emptyMap()).get(entry.address);
-					pointer = grandparent != null && Arrays.equals(parent.prevStateHash, grandparent.hash)
+					byte[] grandparentPayload = grandparent == null
+							? readRetainedPayload(entry.address, parent.prevHeight, parent.prevStateHash) : grandparent.data;
+					pointer = grandparentPayload != null && (grandparent == null
+							|| Arrays.equals(parent.prevStateHash, grandparent.hash))
 							? new StatePointer(parent.prevHeight, parent.prevStateHash) : null;
 				}
 				parentPointers.put(entry.address, pointer);
