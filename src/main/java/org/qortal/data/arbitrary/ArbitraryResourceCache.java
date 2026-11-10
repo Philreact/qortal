@@ -1,12 +1,13 @@
 package org.qortal.data.arbitrary;
 
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -21,6 +22,8 @@ public class ArbitraryResourceCache {
     private ConcurrentHashMap<String, Integer> levelByName = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, ServiceSearchIndex> searchIndexes = new ConcurrentHashMap<>();
     private volatile boolean initialized;
+    // Accessed only under dataByService, including updates recorded by put().
+    private final List<Refresh> refreshes = new ArrayList<>();
 
     private ArbitraryResourceCache() {}
 
@@ -42,17 +45,65 @@ public class ArbitraryResourceCache {
         return this.initialized;
     }
 
+    /**
+     * Start before reading the database snapshot. Committed puts during the read
+     * are replayed when publishing it, so an older snapshot cannot undo them.
+     * Always close the refresh, including when the database read fails.
+     */
+    public Refresh beginRefresh() {
+        synchronized (this.dataByService) {
+            Refresh refresh = new Refresh();
+            this.refreshes.add(refresh);
+            return refresh;
+        }
+    }
+
+    public final class Refresh implements AutoCloseable {
+        private final Map<Integer, Map<String, ArbitraryResourceData>> updates = new HashMap<>();
+        private boolean closed;
+
+        private Refresh() {}
+
+        public void replaceAll(Map<Integer, Map<String, ArbitraryResourceData>> resourcesByService) {
+            synchronized (dataByService) {
+                if (this.closed)
+                    throw new IllegalStateException("Refresh already closed");
+                Map<Integer, Map<String, ArbitraryResourceData>> merged = new HashMap<>(resourcesByService);
+                for (Map.Entry<Integer, Map<String, ArbitraryResourceData>> entry : this.updates.entrySet()) {
+                    Map<String, ArbitraryResourceData> serviceResources = new HashMap<>(
+                            merged.getOrDefault(entry.getKey(), java.util.Collections.emptyMap()));
+                    serviceResources.putAll(entry.getValue());
+                    merged.put(entry.getKey(), serviceResources);
+                }
+                ArbitraryResourceCache.this.replaceAll(merged);
+                close();
+            }
+        }
+
+        @Override
+        public void close() {
+            synchronized (dataByService) {
+                this.closed = true;
+                refreshes.remove(this);
+                this.updates.clear();
+            }
+        }
+    }
+
     public void replaceAll(Map<Integer, Map<String, ArbitraryResourceData>> resourcesByService) {
         synchronized (this.dataByService) {
-            this.dataByService.clear();
-            this.dataByService.putAll(resourcesByService);
-            this.searchIndexes.clear();
             for (Map.Entry<Integer, Map<String, ArbitraryResourceData>> entry : resourcesByService.entrySet()) {
-                ServiceSearchIndex index = new ServiceSearchIndex();
-                for (ArbitraryResourceData data : entry.getValue().values())
-                    index.put(resourceKey(data.name, data.identifier), data);
+                ServiceSearchIndex index = this.searchIndexes.get(entry.getKey());
+                if (index == null)
+                    index = new ServiceSearchIndex();
+                index.replaceAll(entry.getValue());
+                // Publish a new service only after its index is complete. Existing
+                // services are reconciled under the same lock used by searches.
                 this.searchIndexes.put(entry.getKey(), index);
             }
+            this.searchIndexes.keySet().retainAll(resourcesByService.keySet());
+            this.dataByService.clear();
+            this.dataByService.putAll(resourcesByService);
             this.initialized = true;
         }
     }
@@ -64,6 +115,8 @@ public class ArbitraryResourceCache {
         synchronized (this.dataByService) {
             this.dataByService.computeIfAbsent(data.service.value, ignored -> new LinkedHashMap<>()).put(key, data);
             this.searchIndexes.computeIfAbsent(data.service.value, ignored -> new ServiceSearchIndex()).put(key, data);
+            for (Refresh refresh : this.refreshes)
+                refresh.updates.computeIfAbsent(data.service.value, ignored -> new HashMap<>()).put(key, data);
         }
     }
 
@@ -84,11 +137,54 @@ public class ArbitraryResourceCache {
     }
 
     private static final class ServiceSearchIndex {
-        private final Map<String, IndexedResource> byResourceKey = new LinkedHashMap<>();
-        private final NavigableMap<String, ArbitraryResourceData> names = new TreeMap<>();
-        private final NavigableMap<String, ArbitraryResourceData> identifiers = new TreeMap<>();
-        private final NavigableMap<String, ArbitraryResourceData> titles = new TreeMap<>();
-        private final NavigableMap<String, ArbitraryResourceData> descriptions = new TreeMap<>();
+        private Map<String, IndexedResource> byResourceKey = new LinkedHashMap<>();
+        private final NavigableMap<String, IndexedResource> names = new TreeMap<>();
+        private final NavigableMap<String, IndexedResource> identifiers = new TreeMap<>();
+        private final NavigableMap<String, IndexedResource> titles = new TreeMap<>();
+        private final NavigableMap<String, IndexedResource> descriptions = new TreeMap<>();
+
+        private synchronized void replaceAll(Map<String, ArbitraryResourceData> resources) {
+            Map<String, IndexedResource> replacement = new LinkedHashMap<>();
+            List<IndexedResource> removals = new ArrayList<>();
+            List<IndexedResource> additions = new ArrayList<>();
+            // Preserve incoming iteration order (including sort tie behavior), while
+            // retaining the expensive normalized keys and tree nodes when possible.
+            for (Map.Entry<String, ArbitraryResourceData> entry : resources.entrySet()) {
+                String key = entry.getKey();
+                ArbitraryResourceData data = entry.getValue();
+                IndexedResource previous = this.byResourceKey.get(key);
+                if (previous != null && previous.matchesIndexedFields(data)) {
+                    previous.updateData(data);
+                    replacement.put(key, previous);
+                } else {
+                    if (previous != null)
+                        removals.add(previous);
+                    IndexedResource current = new IndexedResource(key, data);
+                    additions.add(current);
+                    replacement.put(key, current);
+                }
+            }
+            for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet())
+                if (!replacement.containsKey(entry.getKey()))
+                    removals.add(entry.getValue());
+
+            // With widespread changes, clearing/repopulating the trees needs fewer
+            // edits than individually removing and inserting most of their entries.
+            if ((long) removals.size() + additions.size() > replacement.size()) {
+                this.names.clear();
+                this.identifiers.clear();
+                this.titles.clear();
+                this.descriptions.clear();
+                for (IndexedResource current : replacement.values())
+                    current.addTo(this);
+            } else {
+                for (IndexedResource previous : removals)
+                    previous.removeFrom(this);
+                for (IndexedResource current : additions)
+                    current.addTo(this);
+            }
+            this.byResourceKey = replacement;
+        }
 
         private synchronized void put(String resourceKey, ArbitraryResourceData data) {
             IndexedResource previous = this.byResourceKey.remove(resourceKey);
@@ -197,19 +293,19 @@ public class ArbitraryResourceCache {
         }
 
         private static LinkedHashMap<String, ArbitraryResourceData> prefix(
-                NavigableMap<String, ArbitraryResourceData> index, String prefix) {
+                NavigableMap<String, IndexedResource> index, String prefix) {
             LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
             addPrefix(index, prefix, matches);
             return matches;
         }
 
-        private static void addPrefix(NavigableMap<String, ArbitraryResourceData> index, String prefix,
+        private static void addPrefix(NavigableMap<String, IndexedResource> index, String prefix,
                                       Map<String, ArbitraryResourceData> destination) {
             if (prefix == null)
                 return;
-            for (Map.Entry<String, ArbitraryResourceData> entry :
+            for (Map.Entry<String, IndexedResource> entry :
                     index.subMap(prefix, true, prefix + Character.MAX_VALUE, true).entrySet()) {
-                ArbitraryResourceData data = entry.getValue();
+                ArbitraryResourceData data = entry.getValue().data;
                 destination.put(resourceKey(data.name, data.identifier), data);
             }
         }
@@ -229,14 +325,20 @@ public class ArbitraryResourceCache {
     }
 
     private static final class IndexedResource {
-        private final ArbitraryResourceData data;
+        // All access is under the owning ServiceSearchIndex monitor. Tree nodes
+        // point to this wrapper so refreshing non-indexed fields needs no tree edits.
+        private ArbitraryResourceData data;
+        private String name;
+        private String identifier;
+        private String title;
+        private String description;
         private final String nameKey;
         private final String identifierKey;
         private final String titleKey;
         private final String descriptionKey;
 
         private IndexedResource(String resourceKey, ArbitraryResourceData data) {
-            this.data = data;
+            updateData(data);
             String suffix = "\0" + resourceKey;
             this.nameKey = normalize(data.name) + suffix;
             this.identifierKey = data.identifier == null ? null : normalize(data.identifier) + suffix;
@@ -246,11 +348,28 @@ public class ArbitraryResourceCache {
                     : normalize(data.metadata.getDescription()) + suffix;
         }
 
+        private void updateData(ArbitraryResourceData data) {
+            this.data = data;
+            // Remember the indexed values independently of mutable resource data,
+            // but use fresh references so previous database rows can be collected.
+            this.name = data.name;
+            this.identifier = data.identifier;
+            this.title = data.metadata == null ? null : data.metadata.getTitle();
+            this.description = data.metadata == null ? null : data.metadata.getDescription();
+        }
+
+        private boolean matchesIndexedFields(ArbitraryResourceData data) {
+            return Objects.equals(this.name, data.name)
+                    && Objects.equals(this.identifier, data.identifier)
+                    && Objects.equals(this.title, data.metadata == null ? null : data.metadata.getTitle())
+                    && Objects.equals(this.description, data.metadata == null ? null : data.metadata.getDescription());
+        }
+
         private void addTo(ServiceSearchIndex index) {
-            index.names.put(this.nameKey, this.data);
-            if (this.identifierKey != null) index.identifiers.put(this.identifierKey, this.data);
-            if (this.titleKey != null) index.titles.put(this.titleKey, this.data);
-            if (this.descriptionKey != null) index.descriptions.put(this.descriptionKey, this.data);
+            index.names.put(this.nameKey, this);
+            if (this.identifierKey != null) index.identifiers.put(this.identifierKey, this);
+            if (this.titleKey != null) index.titles.put(this.titleKey, this);
+            if (this.descriptionKey != null) index.descriptions.put(this.descriptionKey, this);
         }
 
         private void removeFrom(ServiceSearchIndex index) {

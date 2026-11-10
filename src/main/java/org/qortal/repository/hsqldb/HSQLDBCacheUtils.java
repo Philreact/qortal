@@ -837,7 +837,7 @@ public class HSQLDBCacheUtils {
      */
     public static void fillCache(ArbitraryResourceCache cache, Repository repository) {
 
-        try {
+        try (ArbitraryResourceCache.Refresh refresh = cache.beginRefresh()) {
             // ensure all data is committed in, before we query it
             repository.saveChanges();
 
@@ -850,7 +850,7 @@ public class HSQLDBCacheUtils {
                     .put(ArbitraryResourceCache.resourceKey(data.name, data.identifier), data);
             }
 
-            cache.replaceAll(dataByService);
+            refresh.replaceAll(dataByService);
 
             fillNamepMap(cache.getLevelByName(), repository);
         }

@@ -1024,7 +1024,8 @@ public class NetworkData {
         if (now == null || now < nextConnectTaskTimestamp.get()) {
             return null;
         }
-        if (getImmutableOutboundHandshakedPeers().size() >= minOutboundPeers) {
+        // synchronizedList.size() reads the count without building a PeerList snapshot and lookup map.
+        if (this.outboundHandshakedPeers.size() >= minOutboundPeers) {
             return null;
         }
         boolean hasNoPeers = getImmutableHandshakedPeers().isEmpty();
