@@ -215,19 +215,60 @@ public class ArbitraryDataReader {
     }
 
     /**
+     * API callers must respect builds already queued by the scheduler. Once a build
+     * starts, join its future; do not spin or start a second build outside the queue.
+     * Preserve the synchronous API's wait-for-completion behavior without imposing
+     * a new deadline. Both queue and active-build waits remain interruptible.
+     */
+    public void loadSynchronouslyWhenReady(boolean overwrite, java.util.function.BooleanSupplier stopping)
+            throws DataException, IOException, MissingDataException {
+        this.loadSynchronously(overwrite, 0, stopping);
+    }
+
+    private void waitForQueuedBuild(java.util.function.BooleanSupplier stopping) throws DataException {
+        while (!stopping.getAsBoolean() && !inProgress.containsKey(this.loadKey()) && this.isQueuedForBuild()) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new DataException("Interrupted while waiting for queued load", e);
+            }
+        }
+    }
+
+    boolean isQueuedForBuild() {
+        return ArbitraryDataBuildManager.getInstance().isInBuildQueue(
+                this.resourceId, this.resourceIdType, this.service, this.identifier);
+    }
+
+    /**
      * Load with a timeout for joining an existing build. Zero waits until that build finishes
      * (still interruptibly), so a queue worker does not report a healthy long build as failed.
      */
     public void loadSynchronously(boolean overwrite, long waitTimeoutMillis) throws DataException, IOException, MissingDataException {
+        this.loadSynchronously(overwrite, waitTimeoutMillis, null);
+    }
+
+    private void loadSynchronously(boolean overwrite, long waitTimeoutMillis,
+            java.util.function.BooleanSupplier stopping) throws DataException, IOException, MissingDataException {
         if (waitTimeoutMillis < 0)
             throw new IllegalArgumentException("Wait timeout must not be negative");
         Path key = this.loadKey();
         CompletableFuture<LoadResult> started = new CompletableFuture<>();
         while (true) {
+            if (stopping != null) {
+                // Recheck the queue after joining a cache hit that did not satisfy
+                // a forced rebuild, as well as before the initial attempt.
+                this.waitForQueuedBuild(stopping);
+                if (stopping.getAsBoolean())
+                    return;
+            }
             CompletableFuture<LoadResult> existing = inProgress.putIfAbsent(key, started);
             if (existing == null)
                 break;
-            LoadResult result = this.awaitLoad(existing, waitTimeoutMillis);
+            LoadResult result = this.awaitLoad(existing, waitTimeoutMillis, stopping);
+            if (result == null) // This waiter stopped; the owning build is unaffected.
+                return;
             if (!overwrite || result.rebuilt) {
                 result.applyTo(this);
                 return;
@@ -255,9 +296,24 @@ public class ArbitraryDataReader {
         }
     }
 
-    private LoadResult awaitLoad(CompletableFuture<LoadResult> existing, long timeoutMillis) throws DataException, IOException, MissingDataException {
+    private LoadResult awaitLoad(CompletableFuture<LoadResult> existing, long timeoutMillis,
+            java.util.function.BooleanSupplier stopping) throws DataException, IOException, MissingDataException {
         try {
-            return timeoutMillis == 0 ? existing.get() : existing.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            if (stopping == null)
+                return timeoutMillis == 0 ? existing.get() : existing.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            long started = System.nanoTime();
+            while (!stopping.getAsBoolean()) {
+                long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                if (timeoutMillis > 0 && elapsed >= timeoutMillis)
+                    throw new TimeoutException();
+                long wait = timeoutMillis == 0 ? 50 : Math.min(50, timeoutMillis - elapsed);
+                try {
+                    return existing.get(wait, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException stillBuilding) {
+                    // Observe shutdown without cancelling or releasing another caller's build.
+                }
+            }
+            return null;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new DataException("Interrupted while waiting for concurrent load", e);

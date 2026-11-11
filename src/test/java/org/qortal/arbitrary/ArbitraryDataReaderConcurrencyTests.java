@@ -285,6 +285,171 @@ public class ArbitraryDataReaderConcurrencyTests extends Common {
         assertEquals(3, calculations.get());
     }
 
+    @Test
+    public void apiWaitJoinsOwnerWithoutStartingAnotherBuild() throws Exception {
+        Future<?> first = startOwner();
+        TestReader follower = new TestReader(false, 50L);
+        AtomicReference<Thread> waiting = new AtomicReference<>();
+        Future<?> second = this.executor.submit(() -> {
+            waiting.set(Thread.currentThread());
+            follower.loadSynchronouslyWhenReady(true, () -> false);
+            return null;
+        });
+        awaitFollower(waiting);
+        try {
+            second.get(100, TimeUnit.MILLISECONDS);
+            fail("API wait must not introduce the reader's shorter timeout");
+        } catch (TimeoutException expected) { /* Owner is deliberately still building. */ }
+        this.release.countDown();
+        first.get(5, TimeUnit.SECONDS);
+        second.get(5, TimeUnit.SECONDS);
+        assertEquals(1, this.fetches.get());
+        assertEquals("complete", Files.readString(follower.getFilePath().resolve("payload")));
+    }
+
+    @Test
+    public void forcedApiRebuildStillRespectsQueueAfterJoiningCacheCheck() throws Exception {
+        CountDownLatch cacheCheck = new CountDownLatch(1), releaseCache = new CountDownLatch(1);
+        CountDownLatch queueChecked = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean queued = new java.util.concurrent.atomic.AtomicBoolean(true);
+        TestReader cacheReader = new TestReader(false, 60_000L) {
+            @Override boolean loadFromCache(boolean overwrite) {
+                cacheCheck.countDown();
+                try {
+                    if (!releaseCache.await(5, TimeUnit.SECONDS)) throw new AssertionError("Cache check not released");
+                } catch (InterruptedException e) { throw new AssertionError(e); }
+                return true;
+            }
+        };
+        Future<?> checking = this.executor.submit(() -> { cacheReader.loadSynchronously(false); return null; });
+        assertTrue(cacheCheck.await(5, TimeUnit.SECONDS));
+        TestReader follower = new TestReader(false, 60_000L) {
+            @Override boolean isQueuedForBuild() { queueChecked.countDown(); return queued.get(); }
+        };
+        AtomicReference<Thread> waiting = new AtomicReference<>();
+        Future<?> building = this.executor.submit(() -> {
+            waiting.set(Thread.currentThread());
+            follower.loadSynchronouslyWhenReady(true, () -> false);
+            return null;
+        });
+        try {
+            awaitFollower(waiting);
+            releaseCache.countDown();
+            checking.get(5, TimeUnit.SECONDS);
+            assertTrue(queueChecked.await(5, TimeUnit.SECONDS));
+            assertFalse(building.isDone());
+            assertEquals(0, this.fetches.get());
+            queued.set(false);
+            this.release.countDown();
+            building.get(5, TimeUnit.SECONDS);
+            assertEquals(1, this.fetches.get());
+        } finally {
+            releaseCache.countDown();
+            queued.set(false);
+            this.release.countDown();
+        }
+    }
+
+    @Test
+    public void manyApiWaitersShareOneBuildAndReceiveCompleteOutput() throws Exception {
+        Future<?> first = startOwner();
+        ExecutorService waiters = Executors.newFixedThreadPool(150);
+        java.util.List<Future<?>> calls = new java.util.ArrayList<>();
+        java.util.List<AtomicReference<Thread>> threads = new java.util.ArrayList<>();
+        try {
+            for (int i = 0; i < 150; ++i) {
+                AtomicReference<Thread> thread = new AtomicReference<>();
+                threads.add(thread);
+                calls.add(waiters.submit(() -> {
+                    TestReader follower = new TestReader(false, 60_000L);
+                    thread.set(Thread.currentThread());
+                    follower.loadSynchronouslyWhenReady(true, () -> false);
+                    assertEquals("complete", Files.readString(follower.getFilePath().resolve("payload")));
+                    return null;
+                }));
+            }
+            for (AtomicReference<Thread> thread : threads) awaitFollower(thread);
+            this.release.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            for (Future<?> call : calls) call.get(10, TimeUnit.SECONDS);
+            assertEquals(1, this.fetches.get());
+        } finally {
+            this.release.countDown();
+            waiters.shutdownNow();
+            assertTrue(waiters.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    public void apiShutdownStopsWaitingWithoutCancellingOwner() throws Exception {
+        Future<?> first = startOwner();
+        TestReader follower = new TestReader(false, 60_000L);
+        java.util.concurrent.atomic.AtomicBoolean stopping = new java.util.concurrent.atomic.AtomicBoolean();
+        AtomicReference<Thread> waiting = new AtomicReference<>();
+        Future<?> second = this.executor.submit(() -> {
+            waiting.set(Thread.currentThread());
+            follower.loadSynchronouslyWhenReady(true, stopping::get);
+            return null;
+        });
+        awaitFollower(waiting);
+        stopping.set(true);
+        second.get(5, TimeUnit.SECONDS);
+        assertFalse(first.isDone());
+        assertTrue(this.owner.isBuilding());
+        assertEquals("partial", Files.readString(this.owner.getUncompressedPath().resolve("payload")));
+        this.release.countDown();
+        first.get(5, TimeUnit.SECONDS);
+        assertEquals(1, this.fetches.get());
+    }
+
+    @Test
+    public void shutdownWhileQueuedDoesNotStartABuild() throws Exception {
+        CountDownLatch checked = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean stopping = new java.util.concurrent.atomic.AtomicBoolean();
+        TestReader queued = new TestReader(false, 60_000L) {
+            @Override boolean isQueuedForBuild() { checked.countDown(); return true; }
+        };
+        Future<?> waiting = this.executor.submit(() -> {
+            queued.loadSynchronouslyWhenReady(false, stopping::get);
+            return null;
+        });
+        try {
+            assertTrue(checked.await(5, TimeUnit.SECONDS));
+            stopping.set(true);
+            waiting.get(5, TimeUnit.SECONDS);
+            assertEquals(0, this.fetches.get());
+            assertFalse(Files.exists(queued.getUncompressedPath()));
+        } finally {
+            stopping.set(true);
+        }
+    }
+
+    @Test
+    public void queuedApiWaitIsInterruptibleWithoutBypassingScheduler() throws Exception {
+        CountDownLatch checked = new CountDownLatch(1), finished = new CountDownLatch(1);
+        AtomicReference<Throwable> error = new AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        TestReader queued = new TestReader(false, 50L) {
+            @Override boolean isQueuedForBuild() { checked.countDown(); return true; }
+        };
+        Future<?> waiting = this.executor.submit(() -> {
+            try {
+                queued.loadSynchronouslyWhenReady(false, () -> false);
+            } catch (DataException expected) {
+                error.set(expected.getCause());
+                interrupted.set(Thread.currentThread().isInterrupted());
+            } catch (Exception unexpected) { error.set(unexpected); }
+            finally { finished.countDown(); }
+        });
+        assertTrue(checked.await(5, TimeUnit.SECONDS));
+        waiting.cancel(true);
+        assertTrue(finished.await(5, TimeUnit.SECONDS));
+        assertTrue(error.get() instanceof InterruptedException);
+        assertTrue(interrupted.get());
+        assertEquals(0, this.fetches.get());
+        assertFalse(Files.exists(queued.getUncompressedPath()));
+    }
+
     private Future<?> startOwner() throws Exception {
         Future<?> future = this.executor.submit(() -> {
             this.owner.loadSynchronously(true);

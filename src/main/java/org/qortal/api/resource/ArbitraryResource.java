@@ -2148,13 +2148,29 @@ public String finalizeUpload(
 		}
 	}
 
+	/** Join an existing reader build instead of polling isBuilding in a busy loop. */
+	static void loadForDownload(ArbitraryDataReader reader, boolean rebuild, int maxAttempts,
+			java.util.function.BooleanSupplier stopping) throws DataException, IOException, MissingDataException {
+		int attempts = 0;
+		while (!stopping.getAsBoolean()) {
+			try {
+				reader.loadSynchronouslyWhenReady(rebuild, stopping);
+				return;
+			} catch (MissingDataException e) {
+				// Preserve the existing initial attempt plus retry count. Waiting for a
+				// shared build is handled interruptibly by the reader.
+				if (++attempts > maxAttempts)
+					throw e;
+			}
+		}
+	}
+
 	private void download(Service service, String name, String identifier, String filepath, String encoding, boolean rebuild, boolean async, Integer maxAttempts, boolean attachment, String attachmentFilename) {
 	
 		
 		try {
 			ArbitraryDataReader arbitraryDataReader = new ArbitraryDataReader(name, ArbitraryDataFile.ResourceIdType.NAME, service, identifier);
 	
-			int attempts = 0;
 			if (maxAttempts == null) {
 				maxAttempts = 5;
 			}
@@ -2205,18 +2221,11 @@ public String finalizeUpload(
 				} else {
 					// Need to validate or rebuild
 					// This includes: new data, stale cache, updates, or explicit rebuild
-					while (!Controller.isStopping()) {
-						attempts++;
-						if (!arbitraryDataReader.isBuilding()) {
-							try {
-								arbitraryDataReader.loadSynchronously(rebuild);
-								break;
-							} catch (MissingDataException e) {
-								if (attempts > maxAttempts) {
-									throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA, "Data unavailable. Please try again later.");
-								}
-							}
-						}
+					try {
+						loadForDownload(arbitraryDataReader, rebuild, maxAttempts, Controller::isStopping);
+					} catch (MissingDataException e) {
+						throw ApiExceptionFactory.INSTANCE.createCustomException(request, ApiError.INVALID_CRITERIA,
+								"Data unavailable. Please try again later.");
 					}
 				}
 				

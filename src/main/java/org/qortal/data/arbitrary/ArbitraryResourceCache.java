@@ -2,6 +2,7 @@ package org.qortal.data.arbitrary;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -10,6 +11,7 @@ import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class ArbitraryResourceCache {
     /**
@@ -120,6 +122,7 @@ public class ArbitraryResourceCache {
         }
     }
 
+    /** Treat returned candidates as read-only; later cache writes do not change their membership. */
     public List<ArbitraryResourceData> indexedCandidates(int service, String query, String identifier,
                                                           List<String> names, String title, String description,
                                                           boolean prefixOnly, List<String> exactNames,
@@ -137,142 +140,181 @@ public class ArbitraryResourceCache {
     }
 
     private static final class ServiceSearchIndex {
+        private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+        private final Object snapshotLock = new Object();
+        private volatile List<ArbitraryResourceData> allCandidates;
         private Map<String, IndexedResource> byResourceKey = new LinkedHashMap<>();
         private final NavigableMap<String, IndexedResource> names = new TreeMap<>();
         private final NavigableMap<String, IndexedResource> identifiers = new TreeMap<>();
         private final NavigableMap<String, IndexedResource> titles = new TreeMap<>();
         private final NavigableMap<String, IndexedResource> descriptions = new TreeMap<>();
 
-        private synchronized void replaceAll(Map<String, ArbitraryResourceData> resources) {
-            Map<String, IndexedResource> replacement = new LinkedHashMap<>();
-            List<IndexedResource> removals = new ArrayList<>();
-            List<IndexedResource> additions = new ArrayList<>();
-            // Preserve incoming iteration order (including sort tie behavior), while
-            // retaining the expensive normalized keys and tree nodes when possible.
-            for (Map.Entry<String, ArbitraryResourceData> entry : resources.entrySet()) {
-                String key = entry.getKey();
-                ArbitraryResourceData data = entry.getValue();
-                IndexedResource previous = this.byResourceKey.get(key);
-                if (previous != null && previous.matchesIndexedFields(data)) {
-                    previous.updateData(data);
-                    replacement.put(key, previous);
-                } else {
-                    if (previous != null)
-                        removals.add(previous);
-                    IndexedResource current = new IndexedResource(key, data);
-                    additions.add(current);
-                    replacement.put(key, current);
+        private void replaceAll(Map<String, ArbitraryResourceData> resources) {
+            this.lock.writeLock().lock();
+            try {
+                this.allCandidates = null;
+                Map<String, IndexedResource> replacement = new LinkedHashMap<>();
+                List<IndexedResource> removals = new ArrayList<>();
+                List<IndexedResource> additions = new ArrayList<>();
+                // Preserve incoming iteration order (including sort tie behavior), while
+                // retaining the expensive normalized keys and tree nodes when possible.
+                for (Map.Entry<String, ArbitraryResourceData> entry : resources.entrySet()) {
+                    String key = entry.getKey();
+                    ArbitraryResourceData data = entry.getValue();
+                    IndexedResource previous = this.byResourceKey.get(key);
+                    if (previous != null && previous.matchesIndexedFields(data)) {
+                        previous.updateData(data);
+                        replacement.put(key, previous);
+                    } else {
+                        if (previous != null)
+                            removals.add(previous);
+                        IndexedResource current = new IndexedResource(key, data);
+                        additions.add(current);
+                        replacement.put(key, current);
+                    }
                 }
-            }
-            for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet())
-                if (!replacement.containsKey(entry.getKey()))
-                    removals.add(entry.getValue());
+                for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet())
+                    if (!replacement.containsKey(entry.getKey()))
+                        removals.add(entry.getValue());
 
-            // With widespread changes, clearing/repopulating the trees needs fewer
-            // edits than individually removing and inserting most of their entries.
-            if ((long) removals.size() + additions.size() > replacement.size()) {
-                this.names.clear();
-                this.identifiers.clear();
-                this.titles.clear();
-                this.descriptions.clear();
-                for (IndexedResource current : replacement.values())
-                    current.addTo(this);
-            } else {
-                for (IndexedResource previous : removals)
+                // With widespread changes, clearing/repopulating the trees needs fewer
+                // edits than individually removing and inserting most of their entries.
+                if ((long) removals.size() + additions.size() > replacement.size()) {
+                    this.names.clear();
+                    this.identifiers.clear();
+                    this.titles.clear();
+                    this.descriptions.clear();
+                    for (IndexedResource current : replacement.values())
+                        current.addTo(this);
+                } else {
+                    for (IndexedResource previous : removals)
+                        previous.removeFrom(this);
+                    for (IndexedResource current : additions)
+                        current.addTo(this);
+                }
+                this.byResourceKey = replacement;
+            } finally {
+                this.lock.writeLock().unlock();
+            }
+        }
+
+        private void put(String resourceKey, ArbitraryResourceData data) {
+            this.lock.writeLock().lock();
+            try {
+                this.allCandidates = null;
+                IndexedResource previous = this.byResourceKey.remove(resourceKey);
+                if (previous != null)
                     previous.removeFrom(this);
-                for (IndexedResource current : additions)
-                    current.addTo(this);
+                IndexedResource current = new IndexedResource(resourceKey, data);
+                this.byResourceKey.put(resourceKey, current);
+                current.addTo(this);
+            } finally {
+                this.lock.writeLock().unlock();
             }
-            this.byResourceKey = replacement;
         }
 
-        private synchronized void put(String resourceKey, ArbitraryResourceData data) {
-            IndexedResource previous = this.byResourceKey.remove(resourceKey);
-            if (previous != null)
-                previous.removeFrom(this);
-            IndexedResource current = new IndexedResource(resourceKey, data);
-            this.byResourceKey.put(resourceKey, current);
-            current.addTo(this);
-        }
-
-        private synchronized List<ArbitraryResourceData> candidates(String query, String identifier,
+        private List<ArbitraryResourceData> candidates(String query, String identifier,
                                                                      List<String> requestedNames,
                                                                      String title, String description,
                                                                      boolean prefixOnly,
                                                                      List<String> exactNames,
                                                                      List<String> keywords,
                                                                      boolean defaultResource) {
-            LinkedHashMap<String, ArbitraryResourceData> selected = null;
+            this.lock.readLock().lock();
+            try {
+                LinkedHashMap<String, ArbitraryResourceData> selected = null;
 
-            if (exactNames != null && !exactNames.isEmpty()) {
-                LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
-                for (String exactName : exactNames)
-                    addPrefix(this.names, normalize(exactName) + '\0', matches);
-                selected = intersect(selected, matches);
-            }
-
-            if (prefixOnly && requestedNames != null && !requestedNames.isEmpty()) {
-                LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
-                for (String requestedName : requestedNames)
-                    addPrefix(this.names, normalize(requestedName), matches);
-                selected = intersect(selected, matches);
-            }
-
-            if (prefixOnly && query != null && !query.isEmpty()) {
-                LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
-                String normalized = normalize(query);
-                addPrefix(this.names, normalized, matches);
-                if (!defaultResource) {
-                    addPrefix(this.identifiers, normalized, matches);
-                    addPrefix(this.titles, normalized, matches);
-                    addPrefix(this.descriptions, normalized, matches);
+                if (exactNames != null && !exactNames.isEmpty()) {
+                    LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
+                    for (String exactName : exactNames)
+                        addPrefix(this.names, normalize(exactName) + '\0', matches);
+                    selected = intersect(selected, matches);
                 }
-                selected = intersect(selected, matches);
-            }
 
-            if (prefixOnly && identifier != null && !identifier.isEmpty())
-                selected = intersect(selected, prefix(this.identifiers, normalize(identifier)));
-            if (prefixOnly && title != null && !title.isEmpty())
-                selected = intersect(selected, prefix(this.titles, normalize(title)));
-            if (prefixOnly && description != null && !description.isEmpty())
-                selected = intersect(selected, prefix(this.descriptions, normalize(description)));
-
-            if (!prefixOnly && query != null && !query.isEmpty()) {
-                String term = normalize(query);
-                LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
-                for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet()) {
-                    IndexedResource resource = entry.getValue();
-                    if (resource.nameKey.contains(term) || (!defaultResource
-                            && (contains(resource.identifierKey, term) || contains(resource.titleKey, term)
-                            || contains(resource.descriptionKey, term))))
-                        matches.put(entry.getKey(), resource.data);
+                if (prefixOnly && requestedNames != null && !requestedNames.isEmpty()) {
+                    LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
+                    for (String requestedName : requestedNames)
+                        addPrefix(this.names, normalize(requestedName), matches);
+                    selected = intersect(selected, matches);
                 }
-                selected = intersect(selected, matches);
-            }
 
-            if (!prefixOnly && identifier != null && !identifier.isEmpty())
-                selected = intersect(selected, containing(this.byResourceKey, normalize(identifier), 1));
-            if (!prefixOnly && title != null && !title.isEmpty())
-                selected = intersect(selected, containing(this.byResourceKey, normalize(title), 2));
-            if (!prefixOnly && description != null && !description.isEmpty())
-                selected = intersect(selected, containing(this.byResourceKey, normalize(description), 3));
-            if (keywords != null && !keywords.isEmpty()) {
-                LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
-                for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet()) {
-                    for (String keyword : keywords) {
-                        if (contains(entry.getValue().descriptionKey, normalize(keyword))) {
-                            matches.put(entry.getKey(), entry.getValue().data);
-                            break;
+                if (prefixOnly && query != null && !query.isEmpty()) {
+                    LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
+                    String normalized = normalize(query);
+                    addPrefix(this.names, normalized, matches);
+                    if (!defaultResource) {
+                        addPrefix(this.identifiers, normalized, matches);
+                        addPrefix(this.titles, normalized, matches);
+                        addPrefix(this.descriptions, normalized, matches);
+                    }
+                    selected = intersect(selected, matches);
+                }
+
+                if (prefixOnly && identifier != null && !identifier.isEmpty())
+                    selected = intersect(selected, prefix(this.identifiers, normalize(identifier)));
+                if (prefixOnly && title != null && !title.isEmpty())
+                    selected = intersect(selected, prefix(this.titles, normalize(title)));
+                if (prefixOnly && description != null && !description.isEmpty())
+                    selected = intersect(selected, prefix(this.descriptions, normalize(description)));
+
+                if (!prefixOnly && query != null && !query.isEmpty()) {
+                    String term = normalize(query);
+                    LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
+                    for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet()) {
+                        IndexedResource resource = entry.getValue();
+                        if (resource.nameKey.contains(term) || (!defaultResource
+                                && (contains(resource.identifierKey, term) || contains(resource.titleKey, term)
+                                || contains(resource.descriptionKey, term))))
+                            matches.put(entry.getKey(), resource.data);
+                    }
+                    selected = intersect(selected, matches);
+                }
+
+                if (!prefixOnly && identifier != null && !identifier.isEmpty())
+                    selected = intersect(selected, containing(this.byResourceKey, normalize(identifier), 1));
+                if (!prefixOnly && title != null && !title.isEmpty())
+                    selected = intersect(selected, containing(this.byResourceKey, normalize(title), 2));
+                if (!prefixOnly && description != null && !description.isEmpty())
+                    selected = intersect(selected, containing(this.byResourceKey, normalize(description), 3));
+                if (keywords != null && !keywords.isEmpty()) {
+                    LinkedHashMap<String, ArbitraryResourceData> matches = new LinkedHashMap<>();
+                    for (Map.Entry<String, IndexedResource> entry : this.byResourceKey.entrySet()) {
+                        for (String keyword : keywords) {
+                            if (contains(entry.getValue().descriptionKey, normalize(keyword))) {
+                                matches.put(entry.getKey(), entry.getValue().data);
+                                break;
+                            }
                         }
                     }
+                    selected = intersect(selected, matches);
                 }
-                selected = intersect(selected, matches);
-            }
 
-            if (selected == null)
-                return new ArrayList<>(this.byResourceKey.values().stream()
-                        .map(indexed -> indexed.data).collect(java.util.stream.Collectors.toList()));
-            return new ArrayList<>(selected.values());
+                if (selected == null)
+                    return allCandidates();
+                return new ArrayList<>(selected.values());
+            } finally {
+                this.lock.readLock().unlock();
+            }
+        }
+
+        // Called under the read lock. Build once per update, rather than copying every
+        // resource on every broad search. Only snapshot creation serializes readers;
+        // writers cannot change the entries until all readers release the read lock.
+        private List<ArbitraryResourceData> allCandidates() {
+            List<ArbitraryResourceData> snapshot = this.allCandidates;
+            if (snapshot == null) {
+                synchronized (this.snapshotLock) {
+                    snapshot = this.allCandidates;
+                    if (snapshot == null) {
+                        List<ArbitraryResourceData> values = new ArrayList<>(this.byResourceKey.size());
+                        for (IndexedResource resource : this.byResourceKey.values())
+                            values.add(resource.data);
+                        snapshot = Collections.unmodifiableList(values);
+                        this.allCandidates = snapshot;
+                    }
+                }
+            }
+            return snapshot;
         }
 
         private static LinkedHashMap<String, ArbitraryResourceData> containing(
@@ -325,7 +367,7 @@ public class ArbitraryResourceCache {
     }
 
     private static final class IndexedResource {
-        // All access is under the owning ServiceSearchIndex monitor. Tree nodes
+        // All access is under the owning ServiceSearchIndex read/write lock. Tree nodes
         // point to this wrapper so refreshing non-indexed fields needs no tree edits.
         private ArbitraryResourceData data;
         private String name;

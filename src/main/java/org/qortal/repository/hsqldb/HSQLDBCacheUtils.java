@@ -37,6 +37,7 @@ import java.util.Map;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
@@ -128,6 +129,45 @@ public class HSQLDBCacheUtils {
 
         return cache.indexedCandidates(service.value, query, identifier, names, title, description,
                 prefixOnly, exactMatchNames, keywords, defaultResource);
+    }
+
+    private static final class PageEntry {
+        private ArbitraryResourceData data;
+        private long position;
+
+        private PageEntry(ArbitraryResourceData data, long position) {
+            this.data = data;
+            this.position = position;
+        }
+    }
+
+    private static List<ArbitraryResourceData> selectPage(Stream<ArbitraryResourceData> stream,
+            Comparator<? super ArbitraryResourceData> order, int window, int offset) {
+        // Stable stream sorting preserves encounter order for equal timestamps, even
+        // in reverse order. Include that order in the heap so page boundaries agree.
+        Comparator<PageEntry> ranked = (a, b) -> {
+            int comparison = order.compare(a.data, b.data);
+            return comparison != 0 ? comparison : Long.compare(a.position, b.position);
+        };
+        PriorityQueue<PageEntry> best = new PriorityQueue<>(window, ranked.reversed());
+        long[] position = {0};
+        stream.forEachOrdered(data -> {
+            long current = position[0]++;
+            if (best.size() < window) {
+                best.add(new PageEntry(data, current));
+            } else if (order.compare(data, best.peek().data) < 0) {
+                PageEntry replacement = best.poll();
+                replacement.data = data;
+                replacement.position = current;
+                best.add(replacement);
+            }
+        });
+        List<PageEntry> sorted = new ArrayList<>(best);
+        sorted.sort(ranked);
+        List<ArbitraryResourceData> page = new ArrayList<>(Math.max(0, sorted.size() - offset));
+        for (int i = offset; i < sorted.size(); ++i)
+            page.add(sorted.get(i).data);
+        return page;
     }
 
     /**
@@ -289,19 +329,23 @@ public class HSQLDBCacheUtils {
                     )).values().stream().filter(Optional::isPresent).map(Optional::get); // if there is a value for the group, then retain it
         }
 
-        // sort
-        if( reverse.isPresent() && reverse.get())
-            stream = stream.sorted(CREATED_WHEN_COMPARATOR.reversed());
-        else
-            stream = stream.sorted(CREATED_WHEN_COMPARATOR);
-
-        // skip to offset
-        if( offset.isPresent() ) stream = stream.skip(offset.get());
-
-        // truncate to limit
-        if( limit.isPresent() && limit.get() > 0 ) stream = stream.limit(limit.get());
-
-        List<ArbitraryResourceData> listCopy1 = stream.collect(Collectors.toList());
+        Comparator<? super ArbitraryResourceData> order = reverse.orElse(false)
+                ? CREATED_WHEN_COMPARATOR.reversed() : CREATED_WHEN_COMPARATOR;
+        int skip = offset.orElse(0);
+        if (skip < 0)
+            throw new IllegalArgumentException("Offset must not be negative");
+        long window = (long) skip + limit.orElse(0);
+        List<ArbitraryResourceData> listCopy1;
+        // A small page should not sort every matching resource. For large windows,
+        // retain the full-sort path to avoid a large heap and extra per-row wrappers.
+        if (limit.orElse(0) > 0 && window <= 4096 && window < candidates.size()) {
+            listCopy1 = selectPage(stream, order, (int) window, skip);
+        } else {
+            stream = stream.sorted(order).skip(skip);
+            if (limit.orElse(0) > 0)
+                stream = stream.limit(limit.get());
+            listCopy1 = stream.collect(Collectors.toList());
+        }
 
         List<ArbitraryResourceData> listCopy2 = new ArrayList<>(listCopy1.size());
 
